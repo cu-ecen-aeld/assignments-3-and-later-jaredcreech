@@ -1,4 +1,6 @@
+#define _XOPEN_SOURCE
 #include "systemcalls.h"
+#include <stdlib.h>
 
 /**
  * @param cmd the command to execute with system()
@@ -16,8 +18,13 @@ bool do_system(const char *cmd)
  *   and return a boolean true if the system() call completed with success
  *   or false() if it returned a failure
 */
-
-    return true;
+    int ret;
+    ret = system(cmd);
+    if (ret == -1){
+        return false;
+    } else {
+        return true;
+    }
 }
 
 /**
@@ -45,10 +52,7 @@ bool do_exec(int count, ...)
         command[i] = va_arg(args, char *);
     }
     command[count] = NULL;
-    // this line is to avoid a compile warning before your implementation is complete
-    // and may be removed
-    command[count] = command[count];
-
+    
 /*
  * TODO:
  *   Execute a system command by calling fork, execv(),
@@ -58,10 +62,26 @@ bool do_exec(int count, ...)
  *   as second argument to the execv() command.
  *
 */
+    char * cargs[count];
+    for (i=1, i<count; i++){
+        cargs[i-1] = command[i];
+    }
+    int status;
+    pid_t pid;
+    pid = fork();
+    if (pid == -1)
+        return-1;
+    else if (pid == 0){
+        execv(command[0], cargs);
+        exit(-1);
+    }
 
     va_end(args);
 
-    return true;
+    if (waitpid(pid, &status, 0) == -1)
+        return -1;
+    else if (WIFEXITED (status))
+        return WEXITSTATUS (status);
 }
 
 /**
