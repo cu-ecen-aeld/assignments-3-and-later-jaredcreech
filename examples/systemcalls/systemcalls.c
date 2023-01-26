@@ -83,22 +83,20 @@ bool do_exec(int count, ...)
         execv(command[0], command);
         return false;
     }
-    else
+
+    if (waitpid(pid, &status, 0) == -1)
+        return false;
+    else if (WIFEXITED(status))
     {
-        if (waitpid(pid, &status, 0) == -1)
+        if (WEXITSTATUS(status) != 0)
             return false;
-        else if (WIFEXITED(status))
-        {
-            if (WEXITSTATUS(status) != 0)
-                return false;
-            else
-                return true;
-        }
+        else
+            return true;
     }
 
     va_end(args);
 
-    return false;
+    return true;
 }
 
 /**
@@ -151,17 +149,18 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
             perror("execv");
             return false;
         default:
-            if (waitpid(pid, &status, 0) == -1)
-                return false;
-            else if (WIFEXITED(status))
-            {
-                if (WEXITSTATUS(status) != 0)
-                    return false;
-                else
-                    return true;
-            }
             close(fd);
         }
+    }
+
+    if (waitpid(pid, &status, 0) == -1)
+        return false;
+    else if (WIFEXITED(status))
+    {
+        if (WEXITSTATUS(status) != 0)
+            return false;
+        else
+            return true;
     }
 
     va_end(args);
