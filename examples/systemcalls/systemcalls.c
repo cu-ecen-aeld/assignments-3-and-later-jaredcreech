@@ -1,5 +1,8 @@
+#define _XOPEN_SOURCE
+
 #include <fcntl.h>
 #include <stdlib.h>
+#include <syslog.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -73,21 +76,34 @@ bool do_exec(int count, ...)
     pid_t pid;
     int status;
 
+    openlog(NULL, 0, LOG_USER);
     pid = fork();
     if (pid == -1)
     {
+        syslog(LOG_PID, "fork error");
         return false;
     }
     else if (pid == 0)
     {
+        for (i = 0; i < count; i++)
+        {
+            syslog(LOG_PID, "PID %d command[%d] = %s\n", getpid(), i, command[i]);
+        }
         execv(command[0], command);
-        return false;
+        syslog(LOG_PID, "execv failed");
+        abort();
     }
 
     if (waitpid(pid, &status, 0) == -1)
+    {
+        syslog(LOG_PID, "PID %d returned -1\n", pid);
         return false;
+    }
     else if (WIFEXITED(status))
     {
+        syslog(LOG_PID, "PID %d WIFEXITED(status) = %d\n", pid, WIFEXITED(status));
+        syslog(LOG_PID, "PID %d WEXITSTATUS(status) = %d\n", pid, WEXITSTATUS(status));
+
         if (WEXITSTATUS(status) != 0)
             return false;
         else
@@ -96,7 +112,7 @@ bool do_exec(int count, ...)
 
     va_end(args);
 
-    return true;
+    return false;
 }
 
 /**
@@ -115,6 +131,7 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
         command[i] = va_arg(args, char *);
     }
     command[count] = NULL;
+    command[count] = command[count];
 
     /*
      * TODO
@@ -123,44 +140,55 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
      *   The rest of the behaviour is same as do_exec()
      *
      */
+    openlog(NULL, 0, LOG_USER);
     pid_t pid;
     int status;
     int fd = open(outputfile, O_WRONLY | O_TRUNC | O_CREAT, 0644);
+
     if (fd < 0)
     {
-        perror("open");
+        syslog(LOG_PID, "open");
         return false;
     }
     else
     {
-        switch (pid = fork())
+        pid = fork();
+        if (pid == -1)
         {
-        case -1:
-            perror("fork");
+            syslog(LOG_PID, "fork");
             return false;
-        case 0:
+        }
+        else if (pid == 0)
+        {
+
             if (dup2(fd, STDOUT_FILENO) < 0)
             {
-                perror("dup2");
+                syslog(LOG_PID, "dup2");
                 return false;
             }
-            close(fd);
+            for (i = 0; i < count; i++)
+            {
+                syslog(LOG_PID, "PID %d command[%d] = %s\n", getpid(), i, command[i]);
+            }
             execv(command[0], command);
-            perror("execv");
-            return false;
-        default:
-            close(fd);
+            syslog(LOG_PID, "execv failed");
+            abort();
         }
-    }
 
-    if (waitpid(pid, &status, 0) == -1)
-        return false;
-    else if (WIFEXITED(status))
-    {
-        if (WEXITSTATUS(status) != 0)
+        if (waitpid(pid, &status, 0) == -1)
+        {
+            syslog(LOG_PID, "PID %d returned -1\n", pid);
             return false;
-        else
-            return true;
+        }
+        else if (WIFEXITED(status))
+        {
+            syslog(LOG_PID, "PID %d WIFEXITED(status) = %d\n", pid, WIFEXITED(status));
+            syslog(LOG_PID, "PID %d WEXITSTATUS(status) = %d\n", pid, WEXITSTATUS(status));
+            if (WEXITSTATUS(status) != 0)
+                return false;
+            else
+                return true;
+        }
     }
 
     va_end(args);
