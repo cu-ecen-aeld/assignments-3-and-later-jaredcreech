@@ -115,7 +115,7 @@ make CROSS_COMPILE=${CROSS_COMPILE}
 # on the target rootfs
 cp -f writer finder.sh finder-test.sh autorun-qemu.sh "${OUTDIR}/rootfs/home"
 mkdir ${OUTDIR}/rootfs/home/conf
-cp -f conf/username.txt ${OUTDIR}/rootfs/home/conf
+cp -f conf/username.txt conf/assignment.txt ${OUTDIR}/rootfs/home/conf
 
 # TODO: Chown the root directory
 cd "${OUTDIR}/rootfs/"
