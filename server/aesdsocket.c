@@ -23,13 +23,15 @@
 #include <stdbool.h>
 
 bool cleanShutdown = false;
-int sockfd, new_fd; // listen on sock_fd, new connection on new_fd
+int sockfd; // listen on sock_fd
 
 void sigchld_handler(int s)
 {
 
-    printf("Caught signal: %d\n", s);
+    printf("\n Entered Signal Handler, Caught signal: %d\n", s);
+    syslog(LOG_INFO, "Caught signal, exiting");
     shutdown(sockfd, SHUT_RDWR);
+    cleanShutdown = true;
 
     if (s == SIGCHLD)
     {
@@ -40,11 +42,6 @@ void sigchld_handler(int s)
             ;
 
         errno = saved_errno;
-        cleanShutdown = true;
-    }
-    else
-    {
-        cleanShutdown = true;
     }
 }
 
@@ -59,8 +56,9 @@ void *get_in_addr(struct sockaddr *sa)
     return &(((struct sockaddr_in6 *)sa)->sin6_addr);
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
+    int new_fd; // new connection on new_fd
     struct addrinfo hints, *servinfo, *p;
     struct sockaddr_storage their_addr; // connector's address information
     socklen_t sin_size;
@@ -71,7 +69,28 @@ int main(void)
     char buf[MAXDATASIZE]; // socket receive buffer
     int numbytes;          // number of bytes received
     char *strtowr;         // string to write to file
-    int i;
+    int i, exitCode;
+    bool runAsDaemon = false;
+    pid_t pid;
+
+    // check if run as daemon argument was supplied
+    if (argc == 2)
+    {
+        if (strcmp(argv[1], "-d") == 0)
+        {
+            runAsDaemon = true;
+        }
+        else
+        {
+            printf("Unexpected argument '%s'.\n", argv[1]);
+            exit(-1);
+        }
+    }
+    else if (argc > 2)
+    {
+        printf("Too many arguments.\n");
+        exit(-1);
+    }
 
     memset(&hints, 0, sizeof hints);
     hints.ai_family = AF_UNSPEC;
@@ -118,10 +137,29 @@ int main(void)
         exit(-1);
     }
 
-    if (listen(sockfd, BACKLOG) == -1)
+    if (runAsDaemon == true)
     {
-        perror("listen");
-        exit(-1);
+        pid = fork(); // fork off the parent process
+        if (pid < 0)  // an error occured
+        {
+            perror("fork");
+            exitCode = -1;
+            cleanShutdown = true;
+        }
+        else if (pid > 0) // success: let the parent terminate
+        {
+            printf("Parent process PID %d terminating.", pid);
+            exitCode = 0;
+            cleanShutdown = true;
+        }
+
+        // child process becomes session leader
+        if (setsid() < 0)
+        {
+            perror("setsid");
+            exitCode = -1;
+            cleanShutdown = true;
+        }
     }
 
     sa.sa_handler = sigchld_handler; // reap all dead processes
@@ -130,17 +168,53 @@ int main(void)
     if (sigaction(SIGCHLD, &sa, NULL) == -1)
     {
         perror("sigaction: SIGCHLD\n");
-        exit(-1);
+        exitCode = -1;
+        cleanShutdown = true;
     }
     if (sigaction(SIGINT, &sa, NULL) == -1)
     {
         perror("sigaction: SIGINT\n");
-        exit(-1);
+        exitCode = -1;
+        cleanShutdown = true;
     }
     if (sigaction(SIGTERM, &sa, NULL) == -1)
     {
         perror("sigaction: SIGTERM\n");
-        exit(-1);
+        exitCode = -1;
+        cleanShutdown = true;
+    }
+
+    if (listen(sockfd, BACKLOG) == -1)
+    {
+        perror("listen");
+        exitCode = -1;
+        cleanShutdown = true;
+    }
+
+    if (runAsDaemon == true)
+    {
+        pid = fork(); // fork off the parent process
+        if (pid < 0)  // an error occured
+        {
+            perror("fork");
+            exitCode = -1;
+            cleanShutdown = true;
+        }
+        else if (pid > 0) // success: let the parent terminate
+        {
+            printf("Parent process PID %d terminating.\n", pid);
+            exitCode = 0;
+            cleanShutdown = true;
+        }
+
+        // set new file permissions
+        umask(0);
+
+        // change the working directory to the root directory
+        chdir("/");
+
+        // open the log file
+        openlog("aesdSocketDaemon", LOG_PID, LOG_DAEMON);
     }
 
     printf("server: waiting for connections...\n");
@@ -162,7 +236,8 @@ int main(void)
     {
         // Something else happened
         syslog(LOG_ERR, "ERROR: Could not access or create directory at %s.", WR_PATH);
-        exit(-1);
+        exitCode = -1;
+        cleanShutdown = true;
     }
 
     while (cleanShutdown == false)
@@ -171,7 +246,7 @@ int main(void)
         new_fd = accept(sockfd, (struct sockaddr *)&their_addr, &sin_size);
         if (new_fd == -1)
         {
-            // perror("accept");
+            //perror("accept");
             continue;
         }
 
@@ -181,57 +256,63 @@ int main(void)
         printf("server: got connection from %s\n", s);
         syslog(LOG_INFO, "Accepted connection from %s", s);
 
-        // if (!fork())
-        // {
-        // this is the child process
-        // close(sockfd); // child doesn't need the listener
-        // receive the string from the client
-        if ((numbytes = recv(new_fd, buf, MAXDATASIZE - 1, 0)) == -1)
+        if (!fork())
         {
-            perror("recv");
-            close(new_fd);
-            exit(-1);
-        }
-        buf[numbytes] = '\0'; // add NULL to end of buf for valid string
-        printf("server: received %s", buf);
-        if (buf[numbytes-1] != '\n') printf("\n\n-----------------DID NOT GET NEWLINE---------------\n\n");
+            // this is the child process
+            close(sockfd); // child doesn't need the listener
 
-        // write the string to the file
-        strtowr = (char *)malloc(numbytes * sizeof(char));
-        if (strtowr == NULL)
-        {
-            perror("malloc");
-            exit(-1);
-        }
-        for (i = 0; i <= numbytes; i++)
-        {
-            strtowr[i] = buf[i];
-        }
-        FILE *fp;
-        fp = fopen(FILE_PATH, "a+");
-        if (fp == NULL)
-        {
-            perror("fopen");
-            exit(-1);
-        }
-        if (fputs(strtowr, fp) == EOF)
-        {
-            perror("fputs");
-            exit(-1);
-        }
-        free(strtowr);
+            // receive the string from the client
+            if ((numbytes = recv(new_fd, buf, MAXDATASIZE - 1, 0)) == -1)
+            {
+                perror("recv");
+                close(new_fd);
+                exit(-1);
+            }
+            buf[numbytes] = '\0'; // add NULL to end of buf for valid string
+            printf("server: received %s", buf);
+            if (buf[numbytes - 1] != '\n')
+            {
+                perror("\n\nrecv: Expected newline\n\n");
+                close(new_fd);
+                exit(-1);
+            }
 
-        // read back what you got
-        fseek(fp, 0, SEEK_SET);                       // go to the beginning of the file
-        memset(buf, 0, MAXDATASIZE * sizeof(buf[0])); // zeroize the receive buffer
-        while (fgets(buf, MAXDATASIZE, fp) != NULL)
-        {
-            printf("read from file: %s", buf);
-            if (send(new_fd, buf, strlen(buf), 0) == -1)
-                perror("send");
+            // write the string to the file
+            strtowr = (char *)malloc(numbytes * sizeof(char));
+            if (strtowr == NULL)
+            {
+                perror("malloc");
+                exit(-1);
+            }
+            for (i = 0; i <= numbytes; i++)
+            {
+                strtowr[i] = buf[i];
+            }
+            FILE *fp;
+            fp = fopen(FILE_PATH, "a+");
+            if (fp == NULL)
+            {
+                perror("fopen");
+                exit(-1);
+            }
+            if (fputs(strtowr, fp) == EOF)
+            {
+                perror("fputs");
+                exit(-1);
+            }
+            free(strtowr);
+
+            // read back what you got
+            fseek(fp, 0, SEEK_SET);                       // go to the beginning of the file
+            memset(buf, 0, MAXDATASIZE * sizeof(buf[0])); // zeroize the receive buffer
+            while (fgets(buf, MAXDATASIZE, fp) != NULL)
+            {
+                printf("read from file: %s", buf);
+                if (send(new_fd, buf, strlen(buf), 0) == -1)
+                    perror("send");
+            }
+            fclose(fp);
         }
-        fclose(fp);
-        //}
         close(new_fd); // parent doesn't need this
         printf("server: closed connection from %s\n", s);
         syslog(LOG_INFO, "Closed connection from %s", s);
@@ -240,10 +321,10 @@ int main(void)
     while (cleanShutdown)
     {
         close(new_fd);
-        syslog(LOG_INFO, "Closed connection from %s", s);
         close(sockfd);
+        syslog(LOG_INFO, "Closed connection from %s", s);
         remove(FILE_PATH);
         printf("\nExiting...\n");
-        exit(errno);
+        exit(exitCode);
     }
 }
