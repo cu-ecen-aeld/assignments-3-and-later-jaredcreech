@@ -27,8 +27,6 @@ int sockfd; // listen on sock_fd
 
 void sigchld_handler(int s)
 {
-
-    printf("\n Entered Signal Handler, Caught signal: %d\n", s);
     syslog(LOG_INFO, "Caught signal, exiting");
     shutdown(sockfd, SHUT_RDWR);
     cleanShutdown = true;
@@ -137,31 +135,6 @@ int main(int argc, char **argv)
         exit(-1);
     }
 
-    if (runAsDaemon == true)
-    {
-        pid = fork(); // fork off the parent process
-        if (pid < 0)  // an error occured
-        {
-            perror("fork");
-            exitCode = -1;
-            cleanShutdown = true;
-        }
-        else if (pid > 0) // success: let the parent terminate
-        {
-            printf("Parent process PID %d terminating.", pid);
-            exitCode = 0;
-            cleanShutdown = true;
-        }
-
-        // child process becomes session leader
-        if (setsid() < 0)
-        {
-            perror("setsid");
-            exitCode = -1;
-            cleanShutdown = true;
-        }
-    }
-
     sa.sa_handler = sigchld_handler; // reap all dead processes
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = SA_RESTART;
@@ -202,6 +175,28 @@ int main(int argc, char **argv)
         }
         else if (pid > 0) // success: let the parent terminate
         {
+            printf("Parent process PID %d terminating.", pid);
+            exitCode = 0;
+            cleanShutdown = true;
+        }
+
+        // child process becomes session leader
+        if (setsid() < 0)
+        {
+            perror("setsid");
+            exitCode = -1;
+            cleanShutdown = true;
+        }
+
+        pid = fork(); // fork off the parent process
+        if (pid < 0)  // an error occured
+        {
+            perror("fork");
+            exitCode = -1;
+            cleanShutdown = true;
+        }
+        else if (pid > 0) // success: let the parent terminate
+        {
             printf("Parent process PID %d terminating.\n", pid);
             exitCode = 0;
             cleanShutdown = true;
@@ -212,6 +207,11 @@ int main(int argc, char **argv)
 
         // change the working directory to the root directory
         chdir("/");
+
+        // Close stdin. stdout and stderr
+        close(STDIN_FILENO);
+        close(STDOUT_FILENO);
+        close(STDERR_FILENO);
 
         // open the log file
         openlog("aesdSocketDaemon", LOG_PID, LOG_DAEMON);
