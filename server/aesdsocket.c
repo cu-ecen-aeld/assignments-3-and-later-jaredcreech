@@ -5,6 +5,7 @@
 #define WR_PATH "/var/tmp/"                 // Path to write
 #define FILE_PATH "/var/tmp/aesdsocketdata" // File to write
 
+#include "queue.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -21,13 +22,35 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #include <stdbool.h>
+#include <pthread.h>
+
+typedef struct thread_data
+{
+    pthread_mutex_t *mutex;
+    int new_fd;
+    char *s;
+    int threadComplete;
+} thread_data;
+
+typedef struct slist_data_s slist_data_t;
+struct slist_data_s
+{
+    pthread_t pthreadId;
+    int *threadComplete;
+    SLIST_ENTRY(slist_data_s)
+    entries;
+};
 
 bool cleanShutdown = false;
 int sockfd; // listen on sock_fd
+int timer = 0;
 
+// Handle signals for clean shutdown
 void sigchld_handler(int s)
 {
     syslog(LOG_INFO, "Caught signal, exiting");
+
+    // Shutdown the socket connection
     shutdown(sockfd, SHUT_RDWR);
     cleanShutdown = true;
 
@@ -54,6 +77,125 @@ void *get_in_addr(struct sockaddr *sa)
     return &(((struct sockaddr_in6 *)sa)->sin6_addr);
 }
 
+void *threadFunc(void *thread_param)
+{
+    int numbytes;          // number of bytes received
+    char buf[MAXDATASIZE]; // socket receive buffer
+    char *strtowr;         // string to write to file
+    int i;                 // loop iterator
+    thread_data *thread_func_args = (thread_data *)thread_param;
+
+    // receive the string from the client
+    if ((numbytes = recv(thread_func_args->new_fd, buf, MAXDATASIZE - 1, 0)) == -1)
+    {
+        perror("recv");
+        close(thread_func_args->new_fd);
+        exit(-1);
+    }
+
+    // add NULL to end of buf so that it is a valid string
+    buf[numbytes] = '\0';
+
+    // check for newline string terminator in received data
+    if (buf[numbytes - 1] != '\n')
+    {
+        printf("\n\nrecv: Expected newline!!\n\n");
+        close(thread_func_args->new_fd);
+        exit(-1);
+    }
+
+    // allocate memory for the received string
+    strtowr = (char *)malloc(numbytes * sizeof(char));
+    if (strtowr == NULL)
+    {
+        perror("malloc");
+        exit(-1);
+    }
+
+    // build the string to write
+    for (i = 0; i <= numbytes; i++)
+    {
+        strtowr[i] = buf[i];
+    }
+
+    // lock the write to prevent interleaving from other threads
+    pthread_mutex_lock(thread_func_args->mutex);
+
+    // open the file to append the received data
+    FILE *fp;
+    fp = fopen(FILE_PATH, "a+");
+    if (fp == NULL)
+    {
+        perror("fopen");
+        exit(-1);
+    }
+
+    if (fputs(strtowr, fp) == EOF)
+    {
+        perror("fputs");
+        exit(-1);
+    }
+    free(strtowr); // all done with this string
+
+    // read back what you wrote
+    fseek(fp, 0, SEEK_SET);                       // go to the beginning of the file
+    memset(buf, 0, MAXDATASIZE * sizeof(buf[0])); // zeroize the receive buffer
+    while (fgets(buf, MAXDATASIZE, fp) != NULL)
+    {
+        if (send(thread_func_args->new_fd, buf, strlen(buf), 0) == -1)
+            perror("send");
+    }
+    fclose(fp); // done with the file
+    pthread_mutex_unlock(thread_func_args->mutex);
+
+    // done with the connection
+    close(thread_func_args->new_fd);
+    printf("server: closed connection from %s\n", thread_func_args->s);
+    syslog(LOG_INFO, "Closed connection from %s", thread_func_args->s);
+    thread_func_args->threadComplete = 1;
+    free(thread_func_args);
+    return 0;
+}
+
+void *write_timestamp(void *);
+
+void *write_timestamp(void *unused)
+{
+    printf("inside the timestamp thread\n");
+    pthread_mutex_t tsMutex = PTHREAD_MUTEX_INITIALIZER;
+
+    // lock the write to prevent interleaving from other threads
+    pthread_mutex_lock(&tsMutex);
+
+    // open the file to append the received data
+    FILE *fp;
+    fp = fopen(FILE_PATH, "a+");
+    if (fp == NULL)
+    {
+        perror("fopen");
+        exit(-1);
+    }
+
+    time_t t;
+    struct tm *tmp;
+    char MY_TIME[50];
+    time(&t);
+    tmp = localtime(&t);
+
+    strftime(MY_TIME, sizeof(MY_TIME), "timestamp:%a, %d %b %y %T %z\n", tmp);
+
+    if (fputs(MY_TIME, fp) == EOF)
+    {
+        perror("fputs");
+        exit(-1);
+    }
+
+    fclose(fp); // done with the file
+    pthread_mutex_unlock(&tsMutex);
+
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     int new_fd; // new connection on new_fd
@@ -64,12 +206,10 @@ int main(int argc, char **argv)
     int yes = 1;
     char s[INET6_ADDRSTRLEN];
     int rv;
-    char buf[MAXDATASIZE]; // socket receive buffer
-    int numbytes;          // number of bytes received
-    char *strtowr;         // string to write to file
-    int i, exitCode;
+    int exitCode;
     bool runAsDaemon = false;
     pid_t pid;
+    struct thread_data *thread_param;
 
     // check if run as daemon argument was supplied
     if (argc == 2)
@@ -144,12 +284,16 @@ int main(int argc, char **argv)
         exitCode = -1;
         cleanShutdown = true;
     }
+
+    // shutdown cleanly when SIGINT received
     if (sigaction(SIGINT, &sa, NULL) == -1)
     {
         perror("sigaction: SIGINT\n");
         exitCode = -1;
         cleanShutdown = true;
     }
+
+    // shutdown cleanly when SIGTERM received
     if (sigaction(SIGTERM, &sa, NULL) == -1)
     {
         perror("sigaction: SIGTERM\n");
@@ -164,6 +308,7 @@ int main(int argc, char **argv)
         cleanShutdown = true;
     }
 
+    // setup daemon
     if (runAsDaemon == true)
     {
         pid = fork(); // fork off the parent process
@@ -219,6 +364,7 @@ int main(int argc, char **argv)
 
     printf("server: waiting for connections...\n");
 
+    // setup the destination directory for writing
     DIR *dir = opendir(WR_PATH);
     if (dir)
     {
@@ -240,13 +386,42 @@ int main(int argc, char **argv)
         cleanShutdown = true;
     }
 
+    // Setup Slist
+    slist_data_t *datap = NULL;
+
+    SLIST_HEAD(slisthead, slist_data_s)
+    head;
+    SLIST_INIT(&head);
+
+    if (fork())
+    {
+        while (cleanShutdown == false)
+        {
+            sleep(10);
+            pthread_t tsPthreadId;
+            int rv;
+            printf("timer went off\n");
+            rv = pthread_create(&tsPthreadId, NULL, write_timestamp, NULL);
+            if (rv == 0)
+            {
+                pthread_join(tsPthreadId, 0);
+            }
+            else
+            {
+                perror("ts pthread create");
+                return false;
+            }
+        }
+        exit(0);
+    };
+
     while (cleanShutdown == false)
     { // main accept() loop
         sin_size = sizeof their_addr;
         new_fd = accept(sockfd, (struct sockaddr *)&their_addr, &sin_size);
         if (new_fd == -1)
         {
-            //perror("accept");
+            // perror("accept");
             continue;
         }
 
@@ -256,74 +431,68 @@ int main(int argc, char **argv)
         printf("server: got connection from %s\n", s);
         syslog(LOG_INFO, "Accepted connection from %s", s);
 
-        if (!fork())
+        if (!fork()) // this is the child process
         {
-            // this is the child process
             close(sockfd); // child doesn't need the listener
 
-            // receive the string from the client
-            if ((numbytes = recv(new_fd, buf, MAXDATASIZE - 1, 0)) == -1)
-            {
-                perror("recv");
-                close(new_fd);
-                exit(-1);
-            }
-            buf[numbytes] = '\0'; // add NULL to end of buf for valid string
-            printf("server: received %s", buf);
-            if (buf[numbytes - 1] != '\n')
-            {
-                perror("\n\nrecv: Expected newline\n\n");
-                close(new_fd);
-                exit(-1);
-            }
-
-            // write the string to the file
-            strtowr = (char *)malloc(numbytes * sizeof(char));
-            if (strtowr == NULL)
+            // setup the struct for the connection handling thread
+            thread_param = malloc(sizeof(struct thread_data));
+            if (thread_param == NULL)
             {
                 perror("malloc");
-                exit(-1);
+                exitCode = -1;
+                cleanShutdown = true;
             }
-            for (i = 0; i <= numbytes; i++)
+            thread_param->s = malloc(INET6_ADDRSTRLEN * sizeof(char));
+            if (thread_param->s == NULL)
             {
-                strtowr[i] = buf[i];
+                perror("malloc");
+                exitCode = -1;
+                cleanShutdown = true;
             }
-            FILE *fp;
-            fp = fopen(FILE_PATH, "a+");
-            if (fp == NULL)
-            {
-                perror("fopen");
-                exit(-1);
-            }
-            if (fputs(strtowr, fp) == EOF)
-            {
-                perror("fputs");
-                exit(-1);
-            }
-            free(strtowr);
+            thread_param->new_fd = new_fd;
+            strcpy(thread_param->s, s);
+            thread_param->threadComplete = 0;
 
-            // read back what you got
-            fseek(fp, 0, SEEK_SET);                       // go to the beginning of the file
-            memset(buf, 0, MAXDATASIZE * sizeof(buf[0])); // zeroize the receive buffer
-            while (fgets(buf, MAXDATASIZE, fp) != NULL)
+            // start the thread to handle the connection
+            pthread_t pthreadId;
+            int ret;
+            ret = pthread_create(&pthreadId, NULL, threadFunc, (void *)thread_param);
+            if (ret == 0)
             {
-                printf("read from file: %s", buf);
-                if (send(new_fd, buf, strlen(buf), 0) == -1)
-                    perror("send");
+                datap = malloc(sizeof(slist_data_t));
+                datap->pthreadId = pthreadId;
+                datap->threadComplete = &thread_param->threadComplete;
+                SLIST_INSERT_HEAD(&head, datap, entries);
             }
-            fclose(fp);
+            else
+                return false;
+
+            SLIST_FOREACH(datap, &head, entries)
+            {
+                if (*datap->threadComplete == 1)
+                {
+                    pthread_join(datap->pthreadId, NULL);
+                    free(thread_param->s);
+                    free(thread_param);
+                };
+            };
         }
-        close(new_fd); // parent doesn't need this
-        printf("server: closed connection from %s\n", s);
-        syslog(LOG_INFO, "Closed connection from %s", s);
     }
 
     while (cleanShutdown)
     {
+        // TODO: make sure threads are shut down
         close(new_fd);
         close(sockfd);
         syslog(LOG_INFO, "Closed connection from %s", s);
         remove(FILE_PATH);
+        SLIST_FOREACH(datap, &head, entries)
+        {
+            if (*datap->threadComplete == 1)
+                pthread_join(datap->pthreadId, NULL);
+        };
+        free(datap);
         printf("\nExiting...\n");
         exit(exitCode);
     }
