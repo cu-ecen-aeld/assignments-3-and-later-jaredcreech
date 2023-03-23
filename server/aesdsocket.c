@@ -26,7 +26,6 @@
 
 typedef struct thread_data
 {
-    pthread_mutex_t *mutex;
     int new_fd;
     char *s;
     int threadComplete;
@@ -119,7 +118,9 @@ void *threadFunc(void *thread_param)
     }
 
     // lock the write to prevent interleaving from other threads
-    pthread_mutex_lock(thread_func_args->mutex);
+    pthread_mutex_t mutex;
+    pthread_mutex_init(&mutex, NULL);
+    pthread_mutex_lock(&mutex);
 
     // open the file to append the received data
     FILE *fp;
@@ -146,7 +147,7 @@ void *threadFunc(void *thread_param)
             perror("send");
     }
     fclose(fp); // done with the file
-    pthread_mutex_unlock(thread_func_args->mutex);
+    pthread_mutex_unlock(&mutex);
 
     // done with the connection
     close(thread_func_args->new_fd);
@@ -162,10 +163,11 @@ void *write_timestamp(void *);
 void *write_timestamp(void *unused)
 {
     printf("inside the timestamp thread\n");
-    pthread_mutex_t tsMutex = PTHREAD_MUTEX_INITIALIZER;
 
     // lock the write to prevent interleaving from other threads
-    pthread_mutex_lock(&tsMutex);
+    pthread_mutex_t mutex;
+    pthread_mutex_init(&mutex, NULL);
+    pthread_mutex_lock(&mutex);
 
     // open the file to append the received data
     FILE *fp;
@@ -191,7 +193,7 @@ void *write_timestamp(void *unused)
     }
 
     fclose(fp); // done with the file
-    pthread_mutex_unlock(&tsMutex);
+    pthread_mutex_unlock(&mutex);
 
     return 0;
 }
