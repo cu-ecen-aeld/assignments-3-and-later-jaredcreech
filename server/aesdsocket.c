@@ -105,7 +105,7 @@ void *threadFunc(void *thread_param)
     }
 
     // allocate memory for the received string
-    strtowr = (char *)malloc(numbytes * sizeof(char));
+    strtowr = (char *)malloc((numbytes + 1) * sizeof(char));
     if (strtowr == NULL)
     {
         perror("malloc");
@@ -393,26 +393,29 @@ int main(int argc, char **argv)
     head;
     SLIST_INIT(&head);
 
-    if (fork())
+    if (!fork())
     {
         while (cleanShutdown == false)
         {
-            sleep(10);
-            pthread_t tsPthreadId;
-            int rv;
-            printf("timer went off\n");
-            rv = pthread_create(&tsPthreadId, NULL, write_timestamp, NULL);
-            if (rv == 0)
+            if (sleep(10) > 0)
             {
-                pthread_join(tsPthreadId, 0);
+                cleanShutdown = true;
+                break;
             }
             else
             {
-                perror("ts pthread create");
-                return false;
+                printf("timer went off\n");
+
+                pthread_t tsPthreadId;
+                if (pthread_create(&tsPthreadId, NULL, write_timestamp, NULL) != 0)
+                {
+                    perror("ts pthread create");
+                    return false;
+                }
+                pthread_join(tsPthreadId, 0);
             }
         }
-        exit(0);
+        exitCode = 0;
     };
 
     while (cleanShutdown == false)
