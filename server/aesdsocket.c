@@ -208,7 +208,7 @@ int main(int argc, char **argv)
     int yes = 1;
     char s[INET6_ADDRSTRLEN];
     int rv;
-    int exitCode;
+    int exitCode = 0;
     bool runAsDaemon = false;
     pid_t pid;
     struct thread_data *thread_param;
