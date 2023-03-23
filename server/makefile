@@ -1,7 +1,7 @@
 all: default
 
 default: aesdsocket.c
-	$(CC) $(CCFLAGS) -Wall -Werror -pthread -c aesdsocket.c
+	$(CC) $(CCFLAGS) -Wall -Werror -pthread -g -c aesdsocket.c
 	$(CC) $(LDFLAGS) -Wall -Werror aesdsocket.o -o aesdsocket -lpthread
 
 clean:
