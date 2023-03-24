@@ -29,14 +29,12 @@ typedef struct thread_data
     pthread_mutex_t *mutex;
     int new_fd;
     char *s;
-    int threadComplete;
 } thread_data;
 
 typedef struct slist_data_s slist_data_t;
 struct slist_data_s
 {
     pthread_t pthreadId;
-    int *threadComplete;
     SLIST_ENTRY(slist_data_s)
     entries;
 };
@@ -47,8 +45,8 @@ int sockfd; // listen on sock_fd
 // Handle signals for clean shutdown
 void sigchld_handler(int s)
 {
+    printf("Caught signal %d exiting...\n", s);
     syslog(LOG_INFO, "Caught signal, exiting");
-
     // Shutdown the socket connection
     shutdown(sockfd, SHUT_RDWR);
     cleanShutdown = true;
@@ -89,7 +87,7 @@ void *threadFunc(void *thread_param)
     {
         perror("recv");
         close(thread_func_args->new_fd);
-        exit(-1);
+        pthread_exit((void *)EXIT_FAILURE);
     }
 
     // add NULL to end of buf so that it is a valid string
@@ -100,7 +98,7 @@ void *threadFunc(void *thread_param)
     {
         printf("\n\nrecv: Expected newline!!\n\n");
         close(thread_func_args->new_fd);
-        exit(-1);
+        pthread_exit((void *)EXIT_FAILURE);
     }
 
     // allocate memory for the received string
@@ -108,7 +106,7 @@ void *threadFunc(void *thread_param)
     if (strtowr == NULL)
     {
         perror("malloc");
-        exit(-1);
+        pthread_exit((void *)EXIT_FAILURE);
     }
 
     // build the string to write
@@ -126,13 +124,13 @@ void *threadFunc(void *thread_param)
     if (fp == NULL)
     {
         perror("fopen");
-        exit(-1);
+        pthread_exit((void *)EXIT_FAILURE);
     }
 
     if (fputs(strtowr, fp) == EOF)
     {
         perror("fputs");
-        exit(-1);
+        pthread_exit((void *)EXIT_FAILURE);
     }
     free(strtowr); // all done with this string
 
@@ -142,17 +140,18 @@ void *threadFunc(void *thread_param)
     while (fgets(buf, MAXDATASIZE, fp) != NULL)
     {
         if (send(thread_func_args->new_fd, buf, strlen(buf), 0) == -1)
+        {
             perror("send");
+            pthread_exit((void *)EXIT_FAILURE);
+        }
     }
     fclose(fp); // done with the file
     pthread_mutex_unlock(thread_func_args->mutex);
 
     // done with the connection
-    close(thread_func_args->new_fd);
     printf("server: closed connection from %s\n", thread_func_args->s);
     syslog(LOG_INFO, "Closed connection from %s", thread_func_args->s);
-    thread_func_args->threadComplete = 1;
-    pthread_exit((void *) EXIT_SUCCESS);
+    pthread_exit((void *)EXIT_SUCCESS);
 }
 
 void *write_timestamp(void *mutex)
@@ -166,7 +165,7 @@ void *write_timestamp(void *mutex)
     if (fp == NULL)
     {
         perror("fopen");
-        exit(-1);
+        pthread_exit((void *)EXIT_FAILURE);
     }
 
     time_t t;
@@ -180,7 +179,7 @@ void *write_timestamp(void *mutex)
     if (fputs(MY_TIME, fp) == EOF)
     {
         perror("fputs");
-        exit(-1);
+        pthread_exit((void *)EXIT_FAILURE);
     }
 
     fclose(fp); // done with the file
@@ -279,7 +278,7 @@ int main(int argc, char **argv)
         exitCode = -1;
         cleanShutdown = true;
     }
-    
+
     // shutdown cleanly when SIGINT received
     if (sigaction(SIGINT, &sa, NULL) == -1)
     {
@@ -287,7 +286,7 @@ int main(int argc, char **argv)
         exitCode = -1;
         cleanShutdown = true;
     }
-    
+
     // shutdown cleanly when SIGTERM received
     if (sigaction(SIGTERM, &sa, NULL) == -1)
     {
@@ -410,19 +409,26 @@ int main(int argc, char **argv)
                 printf("timer went off\n");
 
                 pthread_t tsPthreadId;
-                if (pthread_create(&tsPthreadId, NULL, write_timestamp, NULL) != 0)
+                if (pthread_create(&tsPthreadId, NULL, write_timestamp, &mutex) != 0)
                 {
                     perror("ts pthread create");
                     return false;
                 }
-                pthread_join(tsPthreadId, 0);
+                int ts_rv;
+                ts_rv = pthread_join(tsPthreadId, EXIT_SUCCESS);
+                if (ts_rv != 0)
+                {
+                    perror("pthread_join, ts");
+                    exitCode = -1;
+                    cleanShutdown = true;
+                }
             }
         }
         exitCode = 0;
     };
 
     while (cleanShutdown == false)
-    { 
+    {
         // main accept() loop
         sin_size = sizeof their_addr;
         new_fd = accept(sockfd, (struct sockaddr *)&their_addr, &sin_size);
@@ -430,84 +436,98 @@ int main(int argc, char **argv)
         {
             continue;
         }
-
-        inet_ntop(their_addr.ss_family,
-                  get_in_addr((struct sockaddr *)&their_addr),
-                  s, sizeof s);
-        printf("server: got connection from %s\n", s);
-        syslog(LOG_INFO, "Accepted connection from %s", s);
-
-        if (!fork()) // this is the child process
+        else if (new_fd > 0)
         {
-            close(sockfd); // child doesn't need the listener
+            inet_ntop(their_addr.ss_family,
+                      get_in_addr((struct sockaddr *)&their_addr),
+                      s, sizeof s);
+            printf("server: got connection from %s\n", s);
+            syslog(LOG_INFO, "Accepted connection from %s", s);
 
-            // setup the struct for the connection handling thread
-            thread_param = malloc(sizeof(struct thread_data));
-            if (thread_param == NULL)
+            if (!fork()) // this is the child process
             {
-                perror("malloc");
-                exitCode = -1;
-                cleanShutdown = true;
-            }
+                close(sockfd); // child doesn't need the listener
 
-            // address of the received connection
-            thread_param->s = malloc(INET6_ADDRSTRLEN * sizeof(char));
-            if (thread_param->s == NULL)
-            {
-                perror("malloc");
-                exitCode = -1;
-                cleanShutdown = true;
-            }
-            strcpy(thread_param->s, s);
-
-            // mutex for writes
-            thread_param->mutex = &mutex;
-           
-            // fd for accepted connection
-            thread_param->new_fd = new_fd;
-
-            // thread completion flag
-            thread_param->threadComplete = 0;
-
-            // start the thread to handle the connection
-            pthread_t pthreadId;
-            int ret;
-            ret = pthread_create(&pthreadId, NULL, threadFunc, (void *)thread_param);
-            if (ret == 0)
-            {
-                datap = malloc(sizeof(slist_data_t));
-                datap->pthreadId = pthreadId;
-                datap->threadComplete = &thread_param->threadComplete;
-                SLIST_INSERT_HEAD(&head, datap, entries);
-            }
-            else
-                return false;
-
-            SLIST_FOREACH(datap, &head, entries)
-            {
-                if (*datap->threadComplete == 1)
+                // setup the struct for the connection handling thread
+                thread_param = malloc(sizeof(struct thread_data));
+                if (thread_param == NULL)
                 {
-                    pthread_join(datap->pthreadId, NULL);
+                    perror("malloc");
+                    exitCode = -1;
+                    cleanShutdown = true;
+                }
+
+                // address of the received connection
+                thread_param->s = malloc(INET6_ADDRSTRLEN * sizeof(char));
+                if (thread_param->s == NULL)
+                {
+                    perror("malloc");
+                    exitCode = -1;
+                    cleanShutdown = true;
+                }
+                strcpy(thread_param->s, s);
+
+                // mutex for writes
+                thread_param->mutex = &mutex;
+
+                // fd for accepted connection
+                thread_param->new_fd = new_fd;
+
+                // start the thread to handle the connection
+                pthread_t pthreadId;
+                int ret;
+                ret = pthread_create(&pthreadId, NULL, threadFunc, (void *)thread_param);
+                if (ret != 0)
+                {
+                    perror("pthread_create");
+                    exitCode = -1;
+                    cleanShutdown = true;
+                }
+                else
+                {
+                    datap = malloc(sizeof(slist_data_t));
+                    datap->pthreadId = pthreadId;
+                    SLIST_INSERT_HEAD(&head, datap, entries);
+                }
+
+                while (!SLIST_EMPTY(&head))
+                {
+                    datap = SLIST_FIRST(&head);
+                    int tc_rv;
+                    tc_rv = pthread_join(datap->pthreadId, EXIT_SUCCESS);
+                    if (tc_rv != 0)
+                    {
+                        perror("pthread_join");
+                        exitCode = -1;
+                        cleanShutdown = true;
+                    }
+                    SLIST_REMOVE_HEAD(&head, entries);
+                    free(datap);
                     free(thread_param->s);
                     free(thread_param);
-                };
-            };
+                }
+            }
         }
     }
 
     while (cleanShutdown)
     {
-        // TODO: make sure threads are shut down
-        close(new_fd);
-        close(sockfd);
-        syslog(LOG_INFO, "Closed connection from %s", s);
-        remove(FILE_PATH);
-        SLIST_FOREACH(datap, &head, entries)
+        while (!SLIST_EMPTY(&head))
         {
-            if (*datap->threadComplete == 1)
-                pthread_join(datap->pthreadId, NULL);
-        };
-        free(datap);
+            datap = SLIST_FIRST(&head);
+            int tc_rv;
+            tc_rv = pthread_join(datap->pthreadId, EXIT_SUCCESS);
+            if (tc_rv != 0)
+            {
+                perror("ptread_join");
+                exitCode = -1;
+                cleanShutdown = true;
+            }
+            SLIST_REMOVE_HEAD(&head, entries);
+            free(datap);
+        }
+        close(sockfd);
+        remove(FILE_PATH);
         printf("\nExiting...\n");
         exit(exitCode);
     }
