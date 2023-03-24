@@ -277,6 +277,7 @@ int main(int argc, char **argv)
         exit(-1);
     }
 
+    // Setup Signal Handlers
     sa.sa_handler = sigchld_handler; // reap all dead processes
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = SA_RESTART;
@@ -286,7 +287,7 @@ int main(int argc, char **argv)
         exitCode = -1;
         cleanShutdown = true;
     }
-
+    
     // shutdown cleanly when SIGINT received
     if (sigaction(SIGINT, &sa, NULL) == -1)
     {
@@ -294,11 +295,19 @@ int main(int argc, char **argv)
         exitCode = -1;
         cleanShutdown = true;
     }
-
+    
     // shutdown cleanly when SIGTERM received
     if (sigaction(SIGTERM, &sa, NULL) == -1)
     {
         perror("sigaction: SIGTERM\n");
+        exitCode = -1;
+        cleanShutdown = true;
+    }
+
+    // shutdown cleanly when SIGPIPE received
+    if (sigaction(SIGPIPE, &sa, NULL) == -1)
+    {
+        perror("sigaction: SIGPIPE\n");
         exitCode = -1;
         cleanShutdown = true;
     }
