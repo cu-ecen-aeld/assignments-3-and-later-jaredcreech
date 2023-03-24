@@ -26,6 +26,7 @@
 
 typedef struct thread_data
 {
+    pthread_mutex_t *mutex;
     int new_fd;
     char *s;
     int threadComplete;
@@ -42,7 +43,6 @@ struct slist_data_s
 
 bool cleanShutdown = false;
 int sockfd; // listen on sock_fd
-int timer = 0;
 
 // Handle signals for clean shutdown
 void sigchld_handler(int s)
@@ -118,9 +118,7 @@ void *threadFunc(void *thread_param)
     }
 
     // lock the write to prevent interleaving from other threads
-    pthread_mutex_t mutex;
-    pthread_mutex_init(&mutex, NULL);
-    pthread_mutex_lock(&mutex);
+    pthread_mutex_lock(thread_func_args->mutex);
 
     // open the file to append the received data
     FILE *fp;
@@ -147,27 +145,20 @@ void *threadFunc(void *thread_param)
             perror("send");
     }
     fclose(fp); // done with the file
-    pthread_mutex_unlock(&mutex);
+    pthread_mutex_unlock(thread_func_args->mutex);
 
     // done with the connection
     close(thread_func_args->new_fd);
     printf("server: closed connection from %s\n", thread_func_args->s);
     syslog(LOG_INFO, "Closed connection from %s", thread_func_args->s);
     thread_func_args->threadComplete = 1;
-    free(thread_func_args);
-    return 0;
+    pthread_exit((void *) EXIT_SUCCESS);
 }
 
-void *write_timestamp(void *);
-
-void *write_timestamp(void *unused)
+void *write_timestamp(void *mutex)
 {
-    printf("inside the timestamp thread\n");
-
     // lock the write to prevent interleaving from other threads
-    pthread_mutex_t mutex;
-    pthread_mutex_init(&mutex, NULL);
-    pthread_mutex_lock(&mutex);
+    pthread_mutex_lock(mutex);
 
     // open the file to append the received data
     FILE *fp;
@@ -193,7 +184,7 @@ void *write_timestamp(void *unused)
     }
 
     fclose(fp); // done with the file
-    pthread_mutex_unlock(&mutex);
+    pthread_mutex_unlock(mutex);
 
     return 0;
 }
@@ -212,6 +203,7 @@ int main(int argc, char **argv)
     bool runAsDaemon = false;
     pid_t pid;
     struct thread_data *thread_param;
+    pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 
     // check if run as daemon argument was supplied
     if (argc == 2)
@@ -430,12 +422,12 @@ int main(int argc, char **argv)
     };
 
     while (cleanShutdown == false)
-    { // main accept() loop
+    { 
+        // main accept() loop
         sin_size = sizeof their_addr;
         new_fd = accept(sockfd, (struct sockaddr *)&their_addr, &sin_size);
         if (new_fd == -1)
         {
-            // perror("accept");
             continue;
         }
 
@@ -457,6 +449,8 @@ int main(int argc, char **argv)
                 exitCode = -1;
                 cleanShutdown = true;
             }
+
+            // address of the received connection
             thread_param->s = malloc(INET6_ADDRSTRLEN * sizeof(char));
             if (thread_param->s == NULL)
             {
@@ -464,8 +458,15 @@ int main(int argc, char **argv)
                 exitCode = -1;
                 cleanShutdown = true;
             }
-            thread_param->new_fd = new_fd;
             strcpy(thread_param->s, s);
+
+            // mutex for writes
+            thread_param->mutex = &mutex;
+           
+            // fd for accepted connection
+            thread_param->new_fd = new_fd;
+
+            // thread completion flag
             thread_param->threadComplete = 0;
 
             // start the thread to handle the connection
