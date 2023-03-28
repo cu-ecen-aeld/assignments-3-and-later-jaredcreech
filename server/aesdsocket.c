@@ -45,11 +45,7 @@ int sockfd; // listen on sock_fd
 // Handle signals for clean shutdown
 void sigchld_handler(int s)
 {
-    printf("Caught signal %d exiting...\n", s);
-    syslog(LOG_INFO, "Caught signal, exiting");
-    // Shutdown the socket connection
-    shutdown(sockfd, SHUT_RDWR);
-    cleanShutdown = true;
+    printf("Caught signal %d...\n", s);
 
     if (s == SIGCHLD)
     {
@@ -60,6 +56,13 @@ void sigchld_handler(int s)
             ;
 
         errno = saved_errno;
+    }
+    else
+    {
+        syslog(LOG_INFO, "Caught signal, exiting");
+        // Shutdown the socket connection
+        shutdown(sockfd, SHUT_RDWR);
+        cleanShutdown = true;
     }
 }
 
