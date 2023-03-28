@@ -153,7 +153,7 @@ void *threadFunc(void *thread_param)
     pthread_mutex_unlock(thread_func_args->mutex);
 
     // done with the connection
-    printf("server: closed connection from %s\n", thread_func_args->s);
+    // printf("server: closed connection from %s\n", thread_func_args->s);
     syslog(LOG_INFO, "Closed connection from %s", thread_func_args->s);
     pthread_exit((void *)EXIT_SUCCESS);
 }
@@ -326,7 +326,7 @@ int main(int argc, char **argv)
         }
         else if (pid > 0) // success: let the parent terminate
         {
-            printf("Parent process PID %d terminating.", pid);
+            // printf("Parent process PID %d terminating.\n", pid);
             exitCode = 0;
             cleanShutdown = true;
         }
@@ -348,7 +348,7 @@ int main(int argc, char **argv)
         }
         else if (pid > 0) // success: let the parent terminate
         {
-            printf("Parent process PID %d terminating.\n", pid);
+            // printf("Parent process PID %d terminating.\n", pid);
             exitCode = 0;
             cleanShutdown = true;
         }
@@ -365,9 +365,9 @@ int main(int argc, char **argv)
         }
 
         // Close stdin. stdout and stderr
-        close(STDIN_FILENO);
-        close(STDOUT_FILENO);
-        close(STDERR_FILENO);
+        // close(STDIN_FILENO);
+        // close(STDOUT_FILENO);
+        // close(STDERR_FILENO);
 
         // open the log file
         openlog("aesdSocketDaemon", LOG_PID, LOG_DAEMON);
@@ -452,7 +452,7 @@ int main(int argc, char **argv)
         inet_ntop(their_addr.ss_family,
                   get_in_addr((struct sockaddr *)&their_addr),
                   s, sizeof s);
-        printf("server: got connection from %s\n", s);
+        // printf("server: got connection from %s\n", s);
         syslog(LOG_INFO, "Accepted connection from %s", s);
 
         if (!fork()) // this is the child process
