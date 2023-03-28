@@ -357,7 +357,12 @@ int main(int argc, char **argv)
         umask(0);
 
         // change the working directory to the root directory
-        chdir("/");
+        if (chdir("/") != 0)
+        {
+            perror("chdir");
+            exitCode = -1;
+            cleanShutdown = true;
+        }
 
         // Close stdin. stdout and stderr
         close(STDIN_FILENO);
