@@ -368,9 +368,9 @@ int main(int argc, char **argv)
         }
 
         // Close stdin. stdout and stderr
-        // close(STDIN_FILENO);
-        // close(STDOUT_FILENO);
-        // close(STDERR_FILENO);
+        close(STDIN_FILENO);
+        close(STDOUT_FILENO);
+        close(STDERR_FILENO);
 
         // open the log file
         openlog("aesdSocketDaemon", LOG_PID, LOG_DAEMON);
