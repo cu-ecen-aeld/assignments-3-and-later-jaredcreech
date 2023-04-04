@@ -50,4 +50,17 @@ Code: d2800001 d2800000 d503233f d50323bf (b900003f)
 `Unable to handle kernel NULL pointer dereference at virtual address 0000000000000000`
 ## The error occured in module faulty, 20 bytes (0x14) into the faulty_write function
 ## which is 32 bytes (0x20) long.
-`pc : faulty_write+0x14/0x20 [faulty]
+`pc : faulty_write+0x14/0x20 [faulty]`
+## faulty_write from faulty.c is below
+```
+ssize_t faulty_write (struct file *filp, const char __user *buf, size_t count,
+		loff_t *pos)
+{
+	/* make a simple fault by dereferencing a NULL pointer */
+	*(int *)0 = 0;
+	return 0;
+}
+```
+## Inspection of the code for faulty_write confirms that the null pointer is dereference
+## as indicated by the Kernel Oops Message
+
