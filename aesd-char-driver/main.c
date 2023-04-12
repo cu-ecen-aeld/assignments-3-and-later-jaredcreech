@@ -14,6 +14,7 @@
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/printk.h>
+#include <linux/slab.h>		/* kmalloc() */
 #include <linux/types.h>
 #include <linux/cdev.h>
 #include <linux/fs.h> // file_operations
@@ -24,7 +25,7 @@ int aesd_minor = 0;
 MODULE_AUTHOR("Your Name Here"); /** TODO: fill in your name **/
 MODULE_LICENSE("Dual BSD/GPL");
 
-struct aesd_dev aesd_device;
+struct aesd_dev *aesd_device;
 
 int aesd_open(struct inode *inode, struct file *filp)
 {
@@ -88,6 +89,24 @@ static int aesd_setup_cdev(struct aesd_dev *dev)
     return err;
 }
 
+void aesd_cleanup_module(void)
+{
+    dev_t devno = MKDEV(aesd_major, aesd_minor);
+
+    cdev_del(&aesd_device->cdev);
+
+    /**
+     * TODO: cleanup AESD specific poritions here as necessary
+     */
+    if (aesd_device->buffer){
+        kfree(aesd_device->buffer);
+    }
+    if (aesd_device){
+        kfree(aesd_device);
+    }
+    unregister_chrdev_region(devno, 1);
+}
+
 int aesd_init_module(void)
 {
     dev_t dev = 0;
@@ -100,32 +119,39 @@ int aesd_init_module(void)
         printk(KERN_WARNING "Can't get major %d\n", aesd_major);
         return result;
     }
-    memset(&aesd_device, 0, sizeof(struct aesd_dev));
+    aesd_device = kmalloc(sizeof(struct aesd_dev), GFP_KERNEL);
+	if (!aesd_device) {
+		result = -ENOMEM;
+        printk(KERN_WARNING "ENOMEM on aesd_device kamlloc");
+        goto fail;
+	}
+    memset(aesd_device, 0, sizeof(struct aesd_dev));
+
+    aesd_device->buffer = kmalloc(sizeof(struct aesd_circular_buffer), GFP_KERNEL);
+	if (!aesd_device->buffer) {
+		result = -ENOMEM;
+        printk(KERN_WARNING "ENOMEM on aesd_device.buffer kamlloc");
+        goto fail;
+	}
+    memset(aesd_device->buffer, 0, sizeof (struct aesd_circular_buffer));
 
     /**
      * TODO: initialize the AESD specific portion of the device
      */
-    aesd_circular_buffer_init(aesd_device.buffer);
+    aesd_circular_buffer_init(aesd_device->buffer);
 
-    result = aesd_setup_cdev(&aesd_device);
+    result = aesd_setup_cdev(aesd_device);
 
     if (result)
     {
         unregister_chrdev_region(dev, 1);
     }
     return result;
-}
 
-void aesd_cleanup_module(void)
-{
-    dev_t devno = MKDEV(aesd_major, aesd_minor);
+    fail:
+        aesd_cleanup_module();
+        return result;
 
-    cdev_del(&aesd_device.cdev);
-
-    /**
-     * TODO: cleanup AESD specific poritions here as necessary
-     */
-    unregister_chrdev_region(devno, 1);
 }
 
 module_init(aesd_init_module);
