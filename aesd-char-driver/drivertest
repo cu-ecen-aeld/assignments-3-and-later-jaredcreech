@@ -1,0 +1,7 @@
+#!/bin/sh
+make clean
+make
+./aesdchar_unload
+./aesdchar_load
+./aesdchar_unload
+echo "Complete -- Exiting..."
