@@ -18,6 +18,7 @@
 #include <linux/cdev.h>
 #include <linux/fs.h> // file_operations
 #include "aesdchar.h"
+#include "aesd-circular-buffer.c"
 int aesd_major =   0; // use dynamic major
 int aesd_minor =   0;
 
@@ -105,6 +106,7 @@ int aesd_init_module(void)
     /**
      * TODO: initialize the AESD specific portion of the device
      */
+    aesd_circular_buffer_init(aesd_device.buffer);
 
     result = aesd_setup_cdev(&aesd_device);
 
