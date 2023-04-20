@@ -31,7 +31,8 @@ struct aesd_dev
      */
     struct cdev cdev;     /* Char device structure      */
     struct mutex lock;    /* mutual exclusion semaphore */
-    struct aesd_circular_buffer *buffer; /*pointer to the circular buffer */
+    struct aesd_circular_buffer *buffer; /* pointer to the circular buffer */
+    struct aesd_buffer_entry *pwrite; /* partial write buffer */
 };
 
 
