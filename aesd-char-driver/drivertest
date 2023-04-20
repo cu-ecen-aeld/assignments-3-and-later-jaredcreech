@@ -3,5 +3,17 @@ make clean
 make
 ./aesdchar_unload
 ./aesdchar_load
+echo "one" > /dev/aesdchar
+echo "two" > /dev/aesdchar
+echo "three" > /dev/aesdchar
+echo "four" > /dev/aesdchar
+echo "five" > /dev/aesdchar
+echo "six" > /dev/aesdchar
+echo "seven" > /dev/aesdchar
+echo "eight" > /dev/aesdchar
+echo "nine" > /dev/aesdchar
+echo "ten" > /dev/aesdchar
+echo "eleven" > /dev/aesdchar
+cat /dev/aesdchar
 ./aesdchar_unload
 echo "Complete -- Exiting..."
