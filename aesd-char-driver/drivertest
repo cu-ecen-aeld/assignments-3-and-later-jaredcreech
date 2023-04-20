@@ -15,5 +15,5 @@ echo "nine" > /dev/aesdchar
 echo "ten" > /dev/aesdchar
 echo "eleven" > /dev/aesdchar
 cat /dev/aesdchar
-./aesdchar_unload
+#./aesdchar_unload
 echo "Complete -- Exiting..."
