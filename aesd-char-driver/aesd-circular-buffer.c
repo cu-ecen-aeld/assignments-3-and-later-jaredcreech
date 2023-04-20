@@ -64,7 +64,7 @@ struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(struct
             PDEBUG("READ: offset_accumulator = %ld; ", offset_accumulator);
             *entry_offset_byte_rtn = char_offset - (offset_accumulator - buffer->entry[offset_entry_pointer].size);
             PDEBUG("READ: *entry_offset_byte_rtn = %ld; ", *entry_offset_byte_rtn);
-            PDEBUG("buffer->entry[%d].buffptr = %s", offset_entry_pointer, buffer->entry[offset_entry_pointer].buffptr);
+            PDEBUG("READ: buffer->entry[%d].buffptr = %s", offset_entry_pointer, buffer->entry[offset_entry_pointer].buffptr);
             return &buffer->entry[offset_entry_pointer];
         }
     }
