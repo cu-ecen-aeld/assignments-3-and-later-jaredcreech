@@ -10,6 +10,7 @@
 
 #ifdef __KERNEL__
 #include <linux/string.h>
+#include <linux/printk.h>
 #else
 #include <string.h>
 #endif
@@ -38,10 +39,11 @@ struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(struct
     size_t offset_accumulator = 0;
     int offset_entry_pointer;
 
+     PDEBUG("running aesd_circular_buffer_find_entry_offset_for_fpos with offset %lu", char_offset);
     // handle the case that the buffer is empty
     if (buffer_empty_flag == 1)
     {
-        // printf("The buffer is empty!\n");
+        PDEBUG("The buffer is empty!\n");
         return NULL;
     }
 
@@ -59,16 +61,16 @@ struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(struct
         {
             // the entry offset byte is the difference between the char offset and the offset accumulator value
             // in the last iteration
-            // printf("READ: offset_accumulator = %ld; ", offset_accumulator);
+            PDEBUG("READ: offset_accumulator = %ld; ", offset_accumulator);
             *entry_offset_byte_rtn = char_offset - (offset_accumulator - buffer->entry[offset_entry_pointer].size);
-            // printf("READ: *entry_offset_byte_rtn = %ld; ", *entry_offset_byte_rtn);
-            // printf("buffer->entry[%d].buffptr = %s", offset_entry_pointer, buffer->entry[offset_entry_pointer].buffptr);
+            PDEBUG("READ: *entry_offset_byte_rtn = %ld; ", *entry_offset_byte_rtn);
+            PDEBUG("buffer->entry[%d].buffptr = %s", offset_entry_pointer, buffer->entry[offset_entry_pointer].buffptr);
             return &buffer->entry[offset_entry_pointer];
         }
     }
 
     // if the loop finishes without returning, the value wasn't found
-    // printf("No entry for char_offset = %ld found \n", char_offset);
+    PDEBUG("No entry for char_offset = %ld found \n", char_offset);
     return NULL;
 }
 
