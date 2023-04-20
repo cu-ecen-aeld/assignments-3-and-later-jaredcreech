@@ -81,7 +81,6 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
     char *kbuf;                                 // kernel read buffer
     size_t kbuf_offset;                         // kernel read buffer offset
     int *mc_rv;                                 // memcpy return value
-    size_t offset = 0;                              // offset to read from
     size_t kcount;                              // size of kernel read buffer
     int num_cb_reads;                           // number of circular buffer reads available
     struct aesd_buffer_entry *entry_offset_ptr; // pointer to the entry with the requested offset
@@ -90,33 +89,31 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
     int entry_offset_index;                     // index of the entry containing the requested entry
     int i;                                      // loop iterator
     ssize_t retval = -ENOMEM;                   // return value
-    PDEBUG("read %zu bytes with offset %lld", count, *f_pos);
+    PDEBUG("aesd_read: read %zu bytes with offset %lld", count, *f_pos);
 
     // return the content of the most recent write commands
-
     for (i = 0; i < AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED; i++)
     {
-        PDEBUG("read entry %d: %s", i, aesd_device->buffer->entry[i].buffptr);
+        PDEBUG("aesd_read: read entry %d: %s", i, aesd_device->buffer->entry[i].buffptr);
     }
-    PDEBUG("(unsigned long) f_pos: %lu", (unsigned long) f_pos);
-    PDEBUG("*f_pos: %lld", *f_pos);
-    // offset = *f_pos;
 
     // figure out where to start reading
     // entry_offset_ptr = aesd_circular_buffer_find_entry_offset_for_fpos(aesd_device->buffer, offset, &entry_offset_byte);
-    entry_offset_ptr = aesd_circular_buffer_find_entry_offset_for_fpos(aesd_device->buffer, (long unsigned)f_pos, &entry_offset_byte);
+    entry_offset_ptr = aesd_circular_buffer_find_entry_offset_for_fpos(
+        aesd_device->buffer,
+        *f_pos,
+        &entry_offset_byte);
 
     // if there's nothing in the buffer return ENOENT
     if ((entry_offset_ptr == NULL))
     {
-        PDEBUG("entry_offset_ptr: %p", entry_offset_ptr);
+        PDEBUG("aesd_read: entry_offset_ptr: %p", entry_offset_ptr);
         return -ENOENT;
     }
 
-    PDEBUG("entry_offset_pter = %p", entry_offset_ptr);
-
     // do pointer math to find out which index was returned
     entry_offset_start = entry_offset_ptr - aesd_device->buffer->entry;
+    PDEBUG("aesd_read: entry_offset_start = %ld", entry_offset_start);
 
     // determine how many entries to pull from the circular buffer
     if (aesd_device->buffer->full == true)
@@ -129,6 +126,7 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
     {
         num_cb_reads = aesd_device->buffer->in_offs - aesd_device->buffer->out_offs;
     }
+    PDEBUG("aesd_read: num_cb_reads = %d", num_cb_reads);
 
     // create a kernel buffer for the read of size count
     kbuf = (char *)kmalloc(count, GFP_KERNEL);
@@ -144,21 +142,21 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
     for (i = 0; i < num_cb_reads; i++)
     {
         entry_offset_index = (entry_offset_start + i) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
-
+        PDEBUG("aesd_read: i = %d", i);
         if (i == 0)
         {
             // copy the data from the circular buffer to the kernel buffer, omitting any offset
             mc_rv = memcpy(kbuf,
                            aesd_device->buffer->entry[entry_offset_index].buffptr + *f_pos,
-                           aesd_device->buffer->entry[entry_offset_index].size - (long unsigned)f_pos);
+                           aesd_device->buffer->entry[entry_offset_index].size - *f_pos);
             if (mc_rv != 0)
             {
                 retval = -EFAULT;
-                PDEBUG("failed memcpy");
+                PDEBUG("aesd_read: failed memcpy");
                 goto fail;
             }
             // update the kernel buffer offset for the next entry
-            kbuf_offset = aesd_device->buffer->entry[entry_offset_index].size - (long unsigned)f_pos;
+            kbuf_offset = aesd_device->buffer->entry[entry_offset_index].size - *f_pos;
         }
         else
         {
@@ -169,7 +167,7 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
             if (mc_rv != 0)
             {
                 retval = -EFAULT;
-                PDEBUG("failed memcpy");
+                PDEBUG("aesd_read: failed memcpy");
                 goto fail;
             }
             // update the kernel buffer offset for the next entry
