@@ -79,16 +79,17 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
                   loff_t *f_pos)
 {
     char *kbuf;                                 // kernel read buffer
-    size_t kbuf_offset;                         // kernel read buffer offset
-    int *mc_rv;                                 // memcpy return value
+    size_t kbuf_offset = 0;                     // kernel read buffer offset
+    long long int *mc_rv;                       // memcpy return value
     size_t kcount;                              // size of kernel read buffer
     int num_cb_reads;                           // number of circular buffer reads available
     struct aesd_buffer_entry *entry_offset_ptr; // pointer to the entry with the requested offset
     size_t entry_offset_byte;                   // byte to start at when returning the first entry
     ptrdiff_t entry_offset_start;               // start index of the entry containing the requested entry
     int entry_offset_index;                     // index of the entry containing the requested entry
-    int i;                                      // loop iterator
-    ssize_t retval = -ENOMEM;                   // return value
+    struct aesd_buffer_entry *entry;
+    int i;                    // loop iterator
+    ssize_t retval = -ENOMEM; // return value
     PDEBUG("aesd_read: read %zu bytes with offset %lld", count, *f_pos);
 
     // return the content of the most recent write commands
@@ -108,7 +109,7 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
     if ((entry_offset_ptr == NULL))
     {
         PDEBUG("aesd_read: entry_offset_ptr: %p", entry_offset_ptr);
-        return -ENOENT;
+        return 0;
     }
 
     // do pointer math to find out which index was returned
@@ -143,44 +144,54 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
     {
         entry_offset_index = (entry_offset_start + i) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
         PDEBUG("aesd_read: i = %d", i);
+
+        // allocate memory for the buffer entry
+        entry = kmalloc(sizeof(struct aesd_buffer_entry), GFP_KERNEL);
+        if (!entry)
+        {
+            retval = -ENOMEM;
+            printk(KERN_ERR "aesd_read: ENOMEM on entry kmalloc");
+            goto fail;
+        }
+
         if (i == 0)
         {
-            // copy the data from the circular buffer to the kernel buffer, omitting any offset
-            mc_rv = memcpy(kbuf,
-                           aesd_device->buffer->entry[entry_offset_index].buffptr + *f_pos,
-                           aesd_device->buffer->entry[entry_offset_index].size - *f_pos);
-            if (mc_rv != 0)
-            {
-                retval = -EFAULT;
-                PDEBUG("aesd_read: failed memcpy");
-                goto fail;
-            }
-            // update the kernel buffer offset for the next entry
-            kbuf_offset = aesd_device->buffer->entry[entry_offset_index].size - *f_pos;
+            // copy the data from the circular buffer to the kernel buffer, omitting any file offset
+            entry->buffptr = aesd_device->buffer->entry[entry_offset_index].buffptr + (*f_pos * sizeof(char));
+            entry->size = aesd_device->buffer->entry[entry_offset_index].size - *f_pos;
         }
         else
         {
-            // copy the data from the circular buffer to the kernel buffer, omitting any offset
-            mc_rv = memcpy(kbuf,
-                           aesd_device->buffer->entry[entry_offset_index].buffptr,
-                           aesd_device->buffer->entry[entry_offset_index].size);
-            if (mc_rv != 0)
-            {
-                retval = -EFAULT;
-                PDEBUG("aesd_read: failed memcpy");
-                goto fail;
-            }
-            // update the kernel buffer offset for the next entry
-            kbuf_offset = kbuf_offset + aesd_device->buffer->entry[entry_offset_index].size;
-        }
+            // copy the data from the circular buffer to the kernel buffer
+            entry->buffptr = aesd_device->buffer->entry[entry_offset_index].buffptr;
+            entry->size = aesd_device->buffer->entry[entry_offset_index].size;
+        }   
+        PDEBUG("aesd_read: entry->buffptr = %s", entry->buffptr);
+        PDEBUG("aesd_read: entry->size = %ld", entry->size);     
+
+        mc_rv = memcpy(kbuf + kbuf_offset, entry->buffptr, entry->size);
+        PDEBUG("aesd_read: kbuf = %s", kbuf);
+        if (mc_rv == NULL)
+        {
+            retval = -EFAULT;
+            PDEBUG("aesd_read: failed memcpy");
+            goto fail;
+        }        
+        // update the kernel buffer offset for the next entry
+        kbuf_offset = kbuf_offset + entry->size;
+        PDEBUG("aesd_read: kbuf_offset = %ld", kbuf_offset);
+        kfree(entry);
     }
     kcount = simple_read_from_buffer(buf, count, f_pos, kbuf, kbuf_offset);
+    PDEBUG("aesd_read: kcount = %ld", kcount);
 
     // done with the read, free the memory;
     kfree(kbuf);
     return kcount;
 
 fail:
+    if(entry)
+        kfree(entry);
     kfree(kbuf);
     return retval;
 }
@@ -193,7 +204,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
     size_t kcount; // kernel write count
     ssize_t retval = -ENOMEM;
     unsigned long cfu_rv; // copy from user return value
-    int *mc_rv;           // memcpy return value
+    long long int *mc_rv; // memcpy return value
     struct aesd_buffer_entry *entry;
     int i;
 
@@ -215,7 +226,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
     if (aesd_device->pwrite->size > 0)
     {
         mc_rv = memcpy(kbuf, aesd_device->pwrite->buffptr, aesd_device->pwrite->size);
-        if (mc_rv != 0)
+        if (mc_rv == NULL)
         {
             retval = -EFAULT;
             PDEBUG("failed memcpy");
@@ -249,7 +260,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
         }
         // copy the partial write into the pwrite buffer in kernel
         mc_rv = memcpy(kbuf, aesd_device->pwrite->buffptr, kcount);
-        if (mc_rv != 0)
+        if (mc_rv == NULL)
         {
             retval = -EFAULT;
             PDEBUG("failed memcpy");
