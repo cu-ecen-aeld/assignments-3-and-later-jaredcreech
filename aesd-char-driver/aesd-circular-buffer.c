@@ -39,7 +39,7 @@ struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(struct
     size_t offset_accumulator = 0;
     int offset_entry_pointer;
 
-     PDEBUG("running aesd_circular_buffer_find_entry_offset_for_fpos with offset %lu", char_offset);
+    //  PDEBUG("running aesd_circular_buffer_find_entry_offset_for_fpos with offset %lu", char_offset);
     // handle the case that the buffer is empty
     if (buffer_empty_flag == 1)
     {
@@ -61,10 +61,11 @@ struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(struct
         {
             // the entry offset byte is the difference between the char offset and the offset accumulator value
             // in the last iteration
-            PDEBUG("READ: offset_accumulator = %ld; ", offset_accumulator);
+            // PDEBUG("READ: buffer->out_offs = %d", buffer->out_offs);
+            // PDEBUG("READ: offset_accumulator = %ld; ", offset_accumulator);
             *entry_offset_byte_rtn = char_offset - (offset_accumulator - buffer->entry[offset_entry_pointer].size);
-            PDEBUG("READ: *entry_offset_byte_rtn = %ld; ", *entry_offset_byte_rtn);
-            PDEBUG("READ: buffer->entry[%d].buffptr = %s", offset_entry_pointer, buffer->entry[offset_entry_pointer].buffptr);
+            // PDEBUG("READ: *entry_offset_byte_rtn = %ld; ", *entry_offset_byte_rtn);
+            // PDEBUG("READ: buffer->entry[%d].buffptr = %s", offset_entry_pointer, buffer->entry[offset_entry_pointer].buffptr);
             return &buffer->entry[offset_entry_pointer];
         }
     }
@@ -83,16 +84,11 @@ struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(struct
  */
 void aesd_circular_buffer_add_entry(struct aesd_circular_buffer *buffer, const struct aesd_buffer_entry *add_entry)
 {
-    // if the buffer isn't empty, and the in and out pointers match, that means it's full
-    // and the out pointer needs to advance so that the oldest item in the buffer can be overwritten
-    if (buffer_empty_flag == 0)
+    // if the buffer is full the out pointer needs to advance so that the oldest item in the buffer can be overwritten
+    if (buffer->full == true)
     {
-        if (buffer->in_offs == buffer->out_offs)
-        {
-            buffer->full = true;
-            buffer->out_offs = buffer->out_offs + 1;
-            buffer->out_offs = buffer->out_offs % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED; // ensure pointer wraps around
-        }
+        buffer->out_offs = buffer->out_offs + 1;
+        buffer->out_offs = buffer->out_offs % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED; // ensure pointer wraps around
     }
 
     // buffer entry pointer gets the address and size of the entry at the current in pointer, overwriting any
@@ -103,7 +99,8 @@ void aesd_circular_buffer_add_entry(struct aesd_circular_buffer *buffer, const s
 
     buffer->in_offs = buffer->in_offs + 1;
     buffer->in_offs = buffer->in_offs % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED; // ensure the pointer wraps around
-
+    if (buffer->in_offs == 0)
+        buffer->full = true;
     // clear the empty flag on the first write
     buffer_empty_flag = 0;
 }
