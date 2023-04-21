@@ -10,6 +10,7 @@ else
 endif
 
 EXTRA_CFLAGS += $(DEBFLAGS)
+EXTRA_CFLAGS += $(CROSS_COMPILE)gcc
 
 ifneq ($(KERNELRELEASE),)
 # call from kernel build system
