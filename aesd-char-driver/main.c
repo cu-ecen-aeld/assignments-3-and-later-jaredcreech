@@ -18,14 +18,17 @@
 #include <linux/types.h>
 #include <linux/cdev.h>
 #include <linux/fs.h> // file_operations
+#include <linux/mutex.h>
 #include "aesdchar.h"
 int aesd_major = 0; // use dynamic major
 int aesd_minor = 0;
 
-MODULE_AUTHOR("Your Name Here"); /** TODO: fill in your name **/
+MODULE_AUTHOR("John Jared Creech"); /** TODO: fill in your name **/
 MODULE_LICENSE("Dual BSD/GPL");
 
 struct aesd_dev *aesd_device;
+
+DEFINE_MUTEX(aesd_mutex);
 
 int aesd_open(struct inode *inode, struct file *filp)
 {
@@ -50,7 +53,7 @@ void aesd_cleanup_module(void)
     int i;
     dev_t devno = MKDEV(aesd_major, aesd_minor);
 
-    PDEBUG("Running aesd_cleanup_module\n");
+    PDEBUG("aesd_cleanup_module");
     cdev_del(&aesd_device->cdev);
 
     if (aesd_device->pwrite)
@@ -90,16 +93,22 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
     struct aesd_buffer_entry *entry;
     int i;                    // loop iterator
     ssize_t retval = -ENOMEM; // return value
+
+    if (mutex_lock_interruptible(&aesd_mutex))
+    {
+        PDEBUG("aesd_read: could not get mutex");
+        return -EINTR;
+    }
+
     PDEBUG("aesd_read: read %zu bytes with offset %lld", count, *f_pos);
 
     // return the content of the most recent write commands
-    for (i = 0; i < AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED; i++)
-    {
-        PDEBUG("aesd_read: read entry %d: %s", i, aesd_device->buffer->entry[i].buffptr);
-    }
+    // for (i = 0; i < AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED; i++)
+    // {
+    //     PDEBUG("aesd_read: read entry %d: %s", i, aesd_device->buffer->entry[i].buffptr);
+    // }
 
     // figure out where to start reading
-    // entry_offset_ptr = aesd_circular_buffer_find_entry_offset_for_fpos(aesd_device->buffer, offset, &entry_offset_byte);
     entry_offset_ptr = aesd_circular_buffer_find_entry_offset_for_fpos(
         aesd_device->buffer,
         *f_pos,
@@ -108,13 +117,14 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
     // if there's nothing in the buffer return ENOENT
     if ((entry_offset_ptr == NULL))
     {
-        PDEBUG("aesd_read: entry_offset_ptr: %p", entry_offset_ptr);
+        // PDEBUG("aesd_read: entry_offset_ptr: %p", entry_offset_ptr);
+        mutex_unlock(&aesd_mutex);
         return 0;
     }
 
     // do pointer math to find out which index was returned
     entry_offset_start = entry_offset_ptr - aesd_device->buffer->entry;
-    PDEBUG("aesd_read: entry_offset_start = %ld", entry_offset_start);
+    // PDEBUG("aesd_read: entry_offset_start = %ld", entry_offset_start);
 
     // determine how many entries to pull from the circular buffer
     if (aesd_device->buffer->full == true)
@@ -127,7 +137,7 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
     {
         num_cb_reads = aesd_device->buffer->in_offs - aesd_device->buffer->out_offs;
     }
-    PDEBUG("aesd_read: num_cb_reads = %d", num_cb_reads);
+    // PDEBUG("aesd_read: num_cb_reads = %d", num_cb_reads);
 
     // create a kernel buffer for the read of size count
     kbuf = (char *)kmalloc(count, GFP_KERNEL);
@@ -135,6 +145,7 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
     {
         retval = -ENOMEM;
         printk(KERN_ERR "ENOMEM on read kmalloc");
+        mutex_unlock(&aesd_mutex);
         return retval;
     }
     memset(kbuf, 0, count * sizeof(char));
@@ -143,7 +154,7 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
     for (i = 0; i < num_cb_reads; i++)
     {
         entry_offset_index = (entry_offset_start + i) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
-        PDEBUG("aesd_read: i = %d", i);
+        // PDEBUG("aesd_read: i = %d", i);
 
         // allocate memory for the buffer entry
         entry = kmalloc(sizeof(struct aesd_buffer_entry), GFP_KERNEL);
@@ -165,34 +176,38 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
             // copy the data from the circular buffer to the kernel buffer
             entry->buffptr = aesd_device->buffer->entry[entry_offset_index].buffptr;
             entry->size = aesd_device->buffer->entry[entry_offset_index].size;
-        }   
-        PDEBUG("aesd_read: entry->buffptr = %s", entry->buffptr);
-        PDEBUG("aesd_read: entry->size = %ld", entry->size);     
+        }
+        // PDEBUG("aesd_read: entry->buffptr = %s", entry->buffptr);
+        // PDEBUG("aesd_read: entry->size = %ld", entry->size);
 
         mc_rv = memcpy(kbuf + kbuf_offset, entry->buffptr, entry->size);
-        PDEBUG("aesd_read: kbuf = %s", kbuf);
         if (mc_rv == NULL)
         {
             retval = -EFAULT;
             PDEBUG("aesd_read: failed memcpy");
             goto fail;
-        }        
+        }
         // update the kernel buffer offset for the next entry
         kbuf_offset = kbuf_offset + entry->size;
-        PDEBUG("aesd_read: kbuf_offset = %ld", kbuf_offset);
+        // PDEBUG("aesd_read: kbuf_offset = %ld", kbuf_offset);
         kfree(entry);
     }
+
+    PDEBUG("aesd_read: kbuf = \n%s", kbuf);
     kcount = simple_read_from_buffer(buf, count, f_pos, kbuf, kbuf_offset);
+
     PDEBUG("aesd_read: kcount = %ld", kcount);
 
     // done with the read, free the memory;
     kfree(kbuf);
+    mutex_unlock(&aesd_mutex);
     return kcount;
 
 fail:
-    if(entry)
+    if (entry)
         kfree(entry);
     kfree(kbuf);
+    mutex_unlock(&aesd_mutex);
     return retval;
 }
 
@@ -206,9 +221,14 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
     unsigned long cfu_rv; // copy from user return value
     long long int *mc_rv; // memcpy return value
     struct aesd_buffer_entry *entry;
-    int i;
+    // int i;
 
     PDEBUG("write %zu bytes with offset %lld", count, *f_pos);
+    if (mutex_lock_interruptible(&aesd_mutex))
+    {
+        PDEBUG("aesd_write: could not get mutex");
+        return -EINTR;
+    }
 
     // size of write is count plus current pwrite size
     kcount = count + aesd_device->pwrite->size;
@@ -219,6 +239,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
     {
         retval = -ENOMEM;
         printk(KERN_ERR "ENOMEM on entry kmalloc");
+        mutex_unlock(&aesd_mutex);
         return retval;
     }
 
@@ -256,6 +277,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
         {
             retval = -ENOMEM;
             printk(KERN_ERR "ENOMEM on kernel pwrite buffer kmalloc");
+            mutex_unlock(&aesd_mutex);
             return retval;
         }
         // copy the partial write into the pwrite buffer in kernel
@@ -269,6 +291,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
         aesd_device->pwrite->size = kcount;
 
         // return the number of bytes from this write
+        mutex_unlock(&aesd_mutex);
         return count;
     }
     else // for complete writes, place the entry into the circular buffer
@@ -293,14 +316,15 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
         entry->size = kcount;
 
         // insert the buffer entry into the circular buffer
-        PDEBUG("running aesd_circular_buffer_add_entry");
         aesd_circular_buffer_add_entry(aesd_device->buffer, entry);
-        for (i = 0; i < AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED; i++)
-        {
-            PDEBUG("write entry %d: %s", i, aesd_device->buffer->entry[i].buffptr);
-        }
+        // for (i = 0; i < AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED; i++)
+        // {
+        //     PDEBUG("aesd_write: in=%d, out=%d, entry[%d]=%s",
+        //     aesd_device->buffer->in_offs, aesd_device->buffer->out_offs, i, aesd_device->buffer->entry[i].buffptr);
+        // }
 
         // return the number of bytes for this write
+        mutex_unlock(&aesd_mutex);
         return count;
     }
 
@@ -310,6 +334,7 @@ fail:
     if (entry)
         kfree(entry);
     kfree(kbuf);
+    mutex_unlock(&aesd_mutex);
     return count;
 }
 struct file_operations aesd_fops = {
