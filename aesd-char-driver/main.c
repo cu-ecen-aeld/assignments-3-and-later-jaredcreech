@@ -224,6 +224,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
     // int i;
 
     PDEBUG("write %zu bytes with offset %lld", count, *f_pos);
+    PDEBUG("aesd_write: received = %s", buf);
     if (mutex_lock_interruptible(&aesd_mutex))
     {
         PDEBUG("aesd_write: could not get mutex");
@@ -232,6 +233,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
 
     // size of write is count plus current pwrite size
     kcount = count + aesd_device->pwrite->size;
+    PDEBUG("count + aesd_device->pwrite->size = %lu", kcount);
 
     // allocate kernel memory for the write
     kbuf = (char *)kmalloc(kcount, GFP_KERNEL);
@@ -242,10 +244,11 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
         mutex_unlock(&aesd_mutex);
         return retval;
     }
-
     // if there is a partial write, copy that into the kernel buffer first
     if (aesd_device->pwrite->size > 0)
     {
+        PDEBUG("aesd_write: last aesd_device->pwrite->size = %lu", aesd_device->pwrite->size);
+        PDEBUG("aesd_write: last aesd_device->pwrite->buffptr = %s", aesd_device->pwrite->buffptr);
         mc_rv = memcpy(kbuf, aesd_device->pwrite->buffptr, aesd_device->pwrite->size);
         if (mc_rv == NULL)
         {
@@ -253,9 +256,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
             PDEBUG("failed memcpy");
             goto fail;
         }
-        // done with this buffer
-        kfree(aesd_device->pwrite->buffptr);
-        aesd_device->pwrite->size = 0;
+        PDEBUG("aesd_write: kbuf from pwrite =\n%s", kbuf);
     }
 
     // copy the user buffer to kernel space and account for any partial write
@@ -266,11 +267,16 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
         PDEBUG("failed copy_from_user with %lu bytes\n", cfu_rv);
         goto fail;
     }
+    // done with the partial write buffer
+    if (aesd_device->pwrite->size > 0)
+        kfree(aesd_device->pwrite->buffptr);
+    aesd_device->pwrite->size = 0;
     PDEBUG("Kernel string: %s", kbuf);
 
     // if this is not a complete write, put it into the partial write buffer
     if (kbuf[kcount - 1] != '\n')
     {
+        PDEBUG("received partial write");
         // allocate memory for the partial write
         aesd_device->pwrite->buffptr = (char *)kmalloc(kcount, GFP_KERNEL);
         if (aesd_device->pwrite->buffptr == NULL)
@@ -281,7 +287,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
             return retval;
         }
         // copy the partial write into the pwrite buffer in kernel
-        mc_rv = memcpy(kbuf, aesd_device->pwrite->buffptr, kcount);
+        mc_rv = memcpy((void *) aesd_device->pwrite->buffptr, kbuf, kcount);
         if (mc_rv == NULL)
         {
             retval = -EFAULT;
@@ -289,6 +295,8 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
             goto fail;
         }
         aesd_device->pwrite->size = kcount;
+        PDEBUG("aesd_write: current aesd_device->pwrite->size = %lu", aesd_device->pwrite->size);
+        //PDEBUG("aesd_write: current aesd_device->pwrite->buffptr = %s", aesd_device->pwrite->buffptr);
 
         // return the number of bytes from this write
         mutex_unlock(&aesd_mutex);
@@ -296,6 +304,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
     }
     else // for complete writes, place the entry into the circular buffer
     {
+        PDEBUG("received complete write");
         // if the buffer is full, delete the current entry before overwriting it
         if (aesd_device->buffer->full == true)
         {
