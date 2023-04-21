@@ -2,8 +2,15 @@
 #define PORT "9000"                         // the port users will be connecting to
 #define BACKLOG 10                          // how many pending connections queue will hold
 #define MAXDATASIZE 1048576                 // max number of bytes we can get at once
+#if USE_AESD_CHAR_DEVICE
+#define WR_PATH "/dev/"                 // Path to write
+#define FILE_PATH "/dev/aesdchar" // File to write
+#define CHAR_DEVICE true
+#else
 #define WR_PATH "/var/tmp/"                 // Path to write
 #define FILE_PATH "/var/tmp/aesdsocketdata" // File to write
+#define CHAR_DEVICE false
+#endif
 
 #include "queue.h"
 #include <stdio.h>
@@ -376,7 +383,7 @@ int main(int argc, char **argv)
         openlog("aesdSocketDaemon", LOG_PID, LOG_DAEMON);
     }
 
-    printf("server: waiting for connections...\n");
+    printf("server: CHAR_DEVICE = %d, waiting for connections...\n", CHAR_DEVICE);
 
     // setup the destination directory for writing
     DIR *dir = opendir(WR_PATH);
@@ -409,7 +416,7 @@ int main(int argc, char **argv)
 
     if (fork())
     {
-        while (cleanShutdown == false)
+        while ((cleanShutdown == false) && !CHAR_DEVICE)
         {
             int rv;
             rv = sleep(10);
@@ -540,7 +547,8 @@ int main(int argc, char **argv)
             free(datap);
         }
         close(sockfd);
-        remove(FILE_PATH);
+        if (!CHAR_DEVICE)
+            remove(FILE_PATH);
         printf("\nExiting...\n");
         exit(exitCode);
     }
