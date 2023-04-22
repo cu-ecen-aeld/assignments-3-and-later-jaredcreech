@@ -20,6 +20,7 @@ aesdchar-y := aesd-circular-buffer.o main.o
 else
 
 KERNELDIR ?= /lib/modules/$(shell uname -r)/build
+$(info '!!!!!!!!!!!!!!!!!!KERNELDIR=$(KERNELDIR)')
 PWD       := $(shell pwd)
 
 modules:
