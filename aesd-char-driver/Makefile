@@ -12,6 +12,8 @@ endif
 EXTRA_CFLAGS += $(DEBFLAGS)
 EXTRA_CFLAGS += -I$(LDDINC)
 
+echo !!!!!!!!!!!!!!!KERNELRELEASE=$(KERNELRELEASE)
+
 ifneq ($(KERNELRELEASE),)
 # call from kernel build system
 obj-m	:= aesdchar.o
