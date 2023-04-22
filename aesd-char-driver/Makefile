@@ -11,7 +11,7 @@ endif
 
 EXTRA_CFLAGS += $(DEBFLAGS)
 
-echo !!!!!!!!!!!!!!!KERNELRELEASE=$(KERNELRELEASE)
+$(info '!!!!!!!!!!!!!!!KERNELRELEASE=$(KERNELRELEASE)')
 
 ifneq ($(KERNELRELEASE),)
 # call from kernel build system
