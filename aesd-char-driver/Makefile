@@ -10,7 +10,6 @@ else
 endif
 
 EXTRA_CFLAGS += $(DEBFLAGS)
-EXTRA_CFLAGS += -I$(LDDINC)
 
 echo !!!!!!!!!!!!!!!KERNELRELEASE=$(KERNELRELEASE)
 
