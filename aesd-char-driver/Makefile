@@ -11,8 +11,6 @@ endif
 
 EXTRA_CFLAGS += $(DEBFLAGS)
 
-$(info '!!!!!!!!!!!!!!!KERNELRELEASE=$(KERNELRELEASE)')
-
 ifneq ($(KERNELRELEASE),)
 # call from kernel build system
 obj-m	:= aesdchar.o
@@ -20,7 +18,6 @@ aesdchar-y := aesd-circular-buffer.o main.o
 else
 
 KERNELDIR ?= /lib/modules/$(shell uname -r)/build
-$(info '!!!!!!!!!!!!!!!!!!KERNELDIR=$(KERNELDIR)')
 PWD       := $(shell pwd)
 
 modules:
@@ -29,13 +26,5 @@ modules:
 endif
 
 clean:
-	rm -rf *.o *~ core .depend .*.cmd *.ko *.mod.c .tmp_versions *.mod modules.order *.symvers
-
-depend .depend dep:
-	$(CC) $(EXTRA_CFLAGS) -M *.c > .depend
-
-
-ifeq (.depend,$(wildcard .depend))
-include .depend
-endif
+	rm -rf *.o *~ core .depend .*.cmd *.ko *.mod.c .tmp_versions
 
