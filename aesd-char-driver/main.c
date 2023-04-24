@@ -79,6 +79,22 @@ void aesd_cleanup_module(void)
     unregister_chrdev_region(devno, 1);
 }
 
+loff_t aesd_llseek(struct file *filp, loff_t f_pos, int whence)
+{
+    loff_t rv; // return value
+    
+    if (mutex_lock_interruptible(&aesd_mutex))
+    {
+        PDEBUG("aesd_llseek: could not get mutex");
+        return -EINTR;
+    }
+    
+    rv = fixed_size_llseek(filp, f_pos, whence, aesd_device->f_size);
+
+    mutex_unlock(&aesd_mutex);
+    return rv;
+}
+
 ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
                   loff_t *f_pos)
 {
@@ -287,7 +303,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
             return retval;
         }
         // copy the partial write into the pwrite buffer in kernel
-        mc_rv = memcpy((void *) aesd_device->pwrite->buffptr, kbuf, kcount);
+        mc_rv = memcpy((void *)aesd_device->pwrite->buffptr, kbuf, kcount);
         if (mc_rv == NULL)
         {
             retval = -EFAULT;
@@ -320,16 +336,15 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
 
         // insert the buffer entry into the circular buffer
         aesd_circular_buffer_add_entry(aesd_device->buffer, entry);
-
     }
 
-        // Update the file size with this write
-        aesd_device->f_size += kcount;
+    // Update the file size with this write
+    aesd_device->f_size += kcount;
 
-        // return the number of bytes from this write
-        f_pos += kcount;
-        mutex_unlock(&aesd_mutex);
-        return kcount;
+    // return the number of bytes from this write
+    f_pos += kcount;
+    mutex_unlock(&aesd_mutex);
+    return kcount;
 
 fail:
     if (aesd_device->pwrite->buffptr)
@@ -346,6 +361,7 @@ struct file_operations aesd_fops = {
     .write = aesd_write,
     .open = aesd_open,
     .release = aesd_release,
+    .llseek = aesd_llseek,
 };
 
 static int aesd_setup_cdev(struct aesd_dev *dev)
