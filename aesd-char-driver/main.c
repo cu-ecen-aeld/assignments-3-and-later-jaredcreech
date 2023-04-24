@@ -115,7 +115,7 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
         *f_pos,
         &entry_offset_byte);
 
-    // if there's nothing in the buffer return ENOENT
+    // if there's nothing in the buffer return 0
     if ((entry_offset_ptr == NULL))
     {
         // PDEBUG("aesd_read: entry_offset_ptr: %p", entry_offset_ptr);
@@ -202,6 +202,8 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
     // done with the read, free the memory;
     kfree(kbuf);
     mutex_unlock(&aesd_mutex);
+    // update the file pointer
+    f_pos += kcount;
     return kcount;
 
 fail:
@@ -222,7 +224,6 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
     unsigned long cfu_rv; // copy from user return value
     long long int *mc_rv; // memcpy return value
     struct aesd_buffer_entry *entry;
-    // int i;
 
     PDEBUG("write %zu bytes with offset %lld", count, *f_pos);
     PDEBUG("aesd_write: received = %s", buf);
@@ -234,7 +235,6 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
 
     // size of write is count plus current pwrite size
     kcount = count + aesd_device->pwrite->size;
-    PDEBUG("count + aesd_device->pwrite->size = %lu", kcount);
 
     // allocate kernel memory for the write
     kbuf = (char *)kmalloc(kcount, GFP_KERNEL);
@@ -272,7 +272,6 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
     if (aesd_device->pwrite->size > 0)
         kfree(aesd_device->pwrite->buffptr);
     aesd_device->pwrite->size = 0;
-    PDEBUG("Kernel string: %s", kbuf);
 
     // if this is not a complete write, put it into the partial write buffer
     if (kbuf[kcount - 1] != '\n')
@@ -296,19 +295,13 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
             goto fail;
         }
         aesd_device->pwrite->size = kcount;
-        PDEBUG("aesd_write: current aesd_device->pwrite->size = %lu", aesd_device->pwrite->size);
-        //PDEBUG("aesd_write: current aesd_device->pwrite->buffptr = %s", aesd_device->pwrite->buffptr);
-
-        // return the number of bytes from this write
-        mutex_unlock(&aesd_mutex);
-        return count;
     }
     else // for complete writes, place the entry into the circular buffer
     {
-        PDEBUG("received complete write");
         // if the buffer is full, delete the current entry before overwriting it
         if (aesd_device->buffer->full == true)
         {
+            aesd_device->f_size -= aesd_device->buffer->entry[aesd_device->buffer->in_offs].size;
             kfree(aesd_device->buffer->entry[aesd_device->buffer->in_offs].buffptr);
         }
 
@@ -327,16 +320,16 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
 
         // insert the buffer entry into the circular buffer
         aesd_circular_buffer_add_entry(aesd_device->buffer, entry);
-        // for (i = 0; i < AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED; i++)
-        // {
-        //     PDEBUG("aesd_write: in=%d, out=%d, entry[%d]=%s",
-        //     aesd_device->buffer->in_offs, aesd_device->buffer->out_offs, i, aesd_device->buffer->entry[i].buffptr);
-        // }
 
-        // return the number of bytes for this write
-        mutex_unlock(&aesd_mutex);
-        return count;
     }
+
+        // Update the file size with this write
+        aesd_device->f_size += kcount;
+
+        // return the number of bytes from this write
+        f_pos += kcount;
+        mutex_unlock(&aesd_mutex);
+        return kcount;
 
 fail:
     if (aesd_device->pwrite->buffptr)
@@ -416,6 +409,7 @@ int aesd_init_module(void)
      */
     aesd_circular_buffer_init(aesd_device->buffer);
     aesd_device->pwrite->size = 0;
+    aesd_device->f_size = 0;
 
     result = aesd_setup_cdev(aesd_device);
 
