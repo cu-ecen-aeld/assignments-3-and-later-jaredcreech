@@ -89,7 +89,7 @@ loff_t aesd_llseek(struct file *filp, loff_t f_pos, int whence)
         PDEBUG("aesd_llseek: could not get mutex");
         return -EINTR;
     }
-    
+
     rv = fixed_size_llseek(filp, f_pos, whence, aesd_device->f_size);
     PDEBUG("aesd_llseek: fixed_size_llseek rv = %lld", rv);
 
@@ -142,7 +142,7 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
     }
 
     // do pointer math to find out which index was returned
-    entry_offset_start = entry_offset_ptr - aesd_device->buffer->entry;    
+    entry_offset_start = entry_offset_ptr - aesd_device->buffer->entry;
     PDEBUG("aesd_read: current out offset = %d, entry_offset_start = %ld", aesd_device->buffer->out_offs, entry_offset_start);
 
     // determine how many entries are available in the circular buffer
@@ -159,7 +159,7 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
     }
     PDEBUG("aesd_read: available num_cb_reads = %d", num_cb_reads);
 
-    // account for the case that the requested offset is large enough to 
+    // account for the case that the requested offset is large enough to
     // exclude any of the available reads
     num_cb_reads -= abs(entry_offset_start - aesd_device->buffer->out_offs);
     PDEBUG("aesd_read: offset num_cb_reads = %d", num_cb_reads);
@@ -201,6 +201,14 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
             // copy the data from the circular buffer to the kernel buffer
             entry->buffptr = aesd_device->buffer->entry[entry_offset_index].buffptr;
             entry->size = aesd_device->buffer->entry[entry_offset_index].size;
+        }
+
+        // if the current entry is larger than what remains to be transferred,
+        // truncate the entry.size and set the number of reads to end the loop
+        if ((count - kbuf_offset) < entry->size)
+        {
+            entry->size = (count - kbuf_offset);
+            num_cb_reads = i;
         }
 
         mc_rv = memcpy(kbuf + kbuf_offset, entry->buffptr, entry->size);
@@ -247,7 +255,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
 
     PDEBUG("aesd_write %zu bytes with offset %lld", count, *f_pos);
     PDEBUG("aesd_write: received = %s", buf);
-    PDEBUG("aesd_write: before write f_size = %ld", aesd_device->f_size);
+    PDEBUG("aesd_write: before write f_size = %lld", aesd_device->f_size);
     if (mutex_lock_interruptible(&aesd_mutex))
     {
         PDEBUG("aesd_write: could not get mutex");
@@ -348,8 +356,8 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
     // return the number of bytes from this write
     *f_pos += aesd_device->f_size;
 
-    PDEBUG("aesd_write: after write f_size = %ld, *f_pos = %lld", aesd_device->f_size, *f_pos);
-        
+    PDEBUG("aesd_write: after write f_size = %lld, *f_pos = %lld", aesd_device->f_size, *f_pos);
+
     mutex_unlock(&aesd_mutex);
     return kcount;
 
