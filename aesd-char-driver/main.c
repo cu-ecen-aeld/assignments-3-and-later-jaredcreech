@@ -84,15 +84,16 @@ loff_t aesd_llseek(struct file *filp, loff_t f_pos, int whence)
     loff_t rv = -EINVAL; // return value
 
     PDEBUG("aesd_llseek: f_pos = %lld; whence = %d", f_pos, whence);
-    // if (mutex_lock_interruptible(&aesd_mutex))
-    // {
-    //     PDEBUG("aesd_llseek: could not get mutex");
-    //     return -EINTR;
-    // }
+    if (mutex_lock_interruptible(&aesd_mutex))
+    {
+        PDEBUG("aesd_llseek: could not get mutex");
+        return -EINTR;
+    }
     
-    // rv = fixed_size_llseek(filp, f_pos, whence, aesd_device->f_size);
+    rv = fixed_size_llseek(filp, f_pos, whence, aesd_device->f_size);
+    PDEBUG("aesd_llseek: fixed_size_llseek rv = %lld", rv);
 
-    // mutex_unlock(&aesd_mutex);
+    mutex_unlock(&aesd_mutex);
     return rv;
 }
 
