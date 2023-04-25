@@ -161,7 +161,7 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
 
     // account for the case that the requested offset is large enough to 
     // exclude any of the available reads
-    num_cb_reads = abs(entry_offset_start - aesd_device->buffer->out_offs);
+    num_cb_reads -= abs(entry_offset_start - aesd_device->buffer->out_offs);
     PDEBUG("aesd_read: offset num_cb_reads = %d", num_cb_reads);
 
     // create a kernel buffer for the read of size count
