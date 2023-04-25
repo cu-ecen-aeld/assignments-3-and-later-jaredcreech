@@ -136,7 +136,7 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
     // if there's nothing in the buffer return 0
     if ((entry_offset_ptr == NULL))
     {
-        PDEBUG("aesd_read: entry_offset_ptr: %p", entry_offset_ptr);
+        // PDEBUG("aesd_read: entry_offset_ptr: %p", entry_offset_ptr);
         mutex_unlock(&aesd_mutex);
         return 0;
     }
@@ -219,7 +219,7 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
     PDEBUG("aesd_read: kbuf = \n%s", kbuf);
     kcount = simple_read_from_buffer(buf, count, f_pos, kbuf, kbuf_offset);
 
-    PDEBUG("aesd_read: *f_pos = %lld, kcount = %ld", *f_pos, kcount);
+    PDEBUG("aesd_read: end of read *f_pos = %lld, kcount = %ld", *f_pos, kcount);
 
     // done with the read, free the memory;
     kfree(kbuf);
@@ -346,7 +346,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
     // Update the file size with this write
     aesd_device->f_size += kcount;
     // return the number of bytes from this write
-    *f_pos += kcount;
+    *f_pos += aesd_device->f_size;
 
     PDEBUG("aesd_write: after write f_size = %ld, *f_pos = %lld", aesd_device->f_size, *f_pos);
         

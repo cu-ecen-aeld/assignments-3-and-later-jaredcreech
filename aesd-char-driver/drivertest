@@ -15,6 +15,6 @@ echo "nine" > /dev/aesdchar
 echo "ten" > /dev/aesdchar
 echo "eleven" > /dev/aesdchar
 cat /dev/aesdchar
-dd if=/dev/aesdchar skip=2 bs=1
+# dd if=/dev/aesdchar bs=1 skip=0
 #./aesdchar_unload
 echo "Complete -- Exiting..."
