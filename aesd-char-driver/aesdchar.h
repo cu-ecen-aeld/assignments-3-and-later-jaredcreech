@@ -33,7 +33,7 @@ struct aesd_dev
     struct mutex lock;    /* mutual exclusion semaphore */
     struct aesd_circular_buffer *buffer; /* pointer to the circular buffer */
     struct aesd_buffer_entry *pwrite; /* partial write buffer */
-    size_t f_size; // file size
+    loff_t f_size; // file size
 };
 
 
