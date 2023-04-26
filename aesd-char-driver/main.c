@@ -21,6 +21,8 @@
 #include <linux/mutex.h>
 #include <linux/uaccess.h>
 #include "aesdchar.h"
+#include "aesd_ioctl.h"
+
 int aesd_major = 0; // use dynamic major
 int aesd_minor = 0;
 
@@ -97,6 +99,11 @@ loff_t aesd_llseek(struct file *filp, loff_t f_pos, int whence)
     return rv;
 }
 
+int aesd_unlocked_ioctl(int fd, unsigned long request, struct aesd_seekto *seekto)
+{
+    return 0;
+}
+
 ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
                   loff_t *f_pos)
 {
@@ -112,6 +119,7 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
     struct aesd_buffer_entry *entry;
     int i;                    // loop iterator
     ssize_t retval = -ENOMEM; // return value
+    loff_t starting_fpos;
 
     if (mutex_lock_interruptible(&aesd_mutex))
     {
@@ -120,6 +128,7 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
     }
 
     PDEBUG("aesd_read: read %zu bytes with offset %lld", count, *f_pos);
+    starting_fpos = *f_pos;
 
     // return the content of the most recent write commands
     // for (i = 0; i < AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED; i++)
@@ -143,7 +152,7 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
 
     // do pointer math to find out which index was returned
     entry_offset_start = entry_offset_ptr - aesd_device->buffer->entry;
-    PDEBUG("aesd_read: current out offset = %d, entry_offset_start = %ld", aesd_device->buffer->out_offs, entry_offset_start);
+    // PDEBUG("aesd_read: current out offset = %d, entry_offset_start = %ld", aesd_device->buffer->out_offs, entry_offset_start);
 
     // determine how many entries are available in the circular buffer
     // a full buffer has the max number of entries available
@@ -157,12 +166,12 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
     {
         num_cb_reads = aesd_device->buffer->in_offs - aesd_device->buffer->out_offs;
     }
-    PDEBUG("aesd_read: available num_cb_reads = %d", num_cb_reads);
+    // PDEBUG("aesd_read: available num_cb_reads = %d", num_cb_reads);
 
     // account for the case that the requested offset is large enough to
     // exclude any of the available reads
     num_cb_reads -= abs(entry_offset_start - aesd_device->buffer->out_offs);
-    PDEBUG("aesd_read: offset num_cb_reads = %d", num_cb_reads);
+    // PDEBUG("aesd_read: offset num_cb_reads = %d", num_cb_reads);
 
     // create a kernel buffer for the read of size count
     kbuf = (char *)kmalloc(count, GFP_KERNEL);
@@ -179,7 +188,7 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
     for (i = 0; i < num_cb_reads; i++)
     {
         entry_offset_index = (entry_offset_start + i) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
-        // PDEBUG("aesd_read: i = %d", i);
+        // PDEBUG("aesd_read: i=%d; entry_offset_index=%d, *f_pos=%lld", i, entry_offset_index, *f_pos);
 
         // allocate memory for the buffer entry
         entry = kmalloc(sizeof(struct aesd_buffer_entry), GFP_KERNEL);
@@ -193,8 +202,8 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
         if (i == 0)
         {
             // copy the data from the circular buffer to the kernel buffer, omitting any file offset
-            entry->buffptr = aesd_device->buffer->entry[entry_offset_index].buffptr + (*f_pos * sizeof(char));
-            entry->size = aesd_device->buffer->entry[entry_offset_index].size - *f_pos;
+            entry->buffptr = aesd_device->buffer->entry[entry_offset_index].buffptr + entry_offset_byte;
+            entry->size = aesd_device->buffer->entry[entry_offset_index].size - entry_offset_byte;
         }
         else
         {
@@ -219,15 +228,17 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
             goto fail;
         }
         // update the kernel buffer offset for the next entry
-        kbuf_offset = kbuf_offset + entry->size;
+        kbuf_offset += entry->size;
+        // PDEBUG("aesd_read: kbuf_offset = %ld", kbuf_offset);
         // PDEBUG("aesd_read: kbuf_offset = %ld", kbuf_offset);
         kfree(entry);
     }
 
-    PDEBUG("aesd_read: kbuf = \n%s", kbuf);
-    kcount = simple_read_from_buffer(buf, count, f_pos, kbuf, kbuf_offset);
+    //update the file pointer
+    kcount = simple_read_from_buffer(buf, count, f_pos, kbuf-*f_pos, aesd_device->f_size);
+    PDEBUG("aesd_read: kbuf = %s\n aesd_read: buf = %s", kbuf, buf);
 
-    PDEBUG("aesd_read: end of read *f_pos = %lld, kcount = %ld", *f_pos, kcount);
+    PDEBUG("aesd_read: end of read count = %ld, *f_pos = %lld, kcount = %ld", count, *f_pos, kcount);
 
     // done with the read, free the memory;
     kfree(kbuf);
@@ -378,6 +389,7 @@ struct file_operations aesd_fops = {
     .open = aesd_open,
     .release = aesd_release,
     .llseek = aesd_llseek,
+    .unlocked_ioctl = aesd_unlocked_ioctl;
 };
 
 static int aesd_setup_cdev(struct aesd_dev *dev)
