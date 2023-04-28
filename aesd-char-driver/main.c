@@ -30,8 +30,53 @@ MODULE_AUTHOR("John Jared Creech"); /** TODO: fill in your name **/
 MODULE_LICENSE("Dual BSD/GPL");
 
 struct aesd_dev *aesd_device;
-
 DEFINE_MUTEX(aesd_mutex);
+
+/**
+ *  Adjust the file offset (f_pos) parameter of @param filp based on the location specified by
+ * @param write_cmd (the zero referenced command to locate)
+ * and @param write_cmd_offset (the zero referenced offset into the command)
+ * @return 0 if successful, negative if error occurred:
+ *      -ERESTARTSYS if mutex could not be obtained
+ *      -EINVAL if write command or write_cmd_offset was out of range
+ */
+
+static long aesd_adjust_file_offset(struct file *filp, unsigned int write_cmd, unsigned int write_cmd_offset)
+{
+    int i;
+    unsigned int calc_offset = 0; // calculated offset
+    size_t entry_offset_byte_return;
+    int rv = -ERESTARTSYS; // return value
+
+    if (mutex_lock_interruptible(&aesd_mutex))
+    {
+        PDEBUG("aesd_adjust_file_offset: could not get mutex");
+        return -ERESTARTSYS;
+    }
+
+    for(i=0; i<=write_cmd; i++)
+    {
+        // PDEBUG("aesd_adjust_file_offset: i=%d, cmd=%d, ofst=%d, cofst=%d, e.sz=%ld", i, 
+        //     write_cmd, write_cmd_offset, calc_offset, aesd_device->buffer->entry[i].size);
+        if (i == write_cmd)
+            calc_offset += write_cmd_offset;
+        else
+            calc_offset += aesd_device->buffer->entry[i].size;
+    }
+
+    if (aesd_circular_buffer_find_entry_offset_for_fpos(aesd_device->buffer, calc_offset, &entry_offset_byte_return) == NULL)
+    {
+        rv = -EINVAL;
+    }
+    else
+    {
+        filp->f_pos = calc_offset;
+        rv = 0;
+    }
+
+    mutex_unlock(&aesd_mutex);
+    return rv;
+}
 
 int aesd_open(struct inode *inode, struct file *filp)
 {
@@ -99,9 +144,35 @@ loff_t aesd_llseek(struct file *filp, loff_t f_pos, int whence)
     return rv;
 }
 
-int aesd_unlocked_ioctl(int fd, unsigned long request, struct aesd_seekto *seekto)
+long int aesd_unlocked_ioctl(struct file *filp, unsigned int cmd_in, unsigned long arg)
 {
-    return 0;
+    long int rv = -EINVAL;
+    struct aesd_seekto seekto;
+
+    switch (cmd_in)
+    {
+    case AESDCHAR_IOCSEEKTO:
+    {
+        if (copy_from_user(&seekto, (const void __user *)arg, sizeof(seekto)) != 0)
+        {
+            rv = -EFAULT;
+        }
+        else
+        {
+            rv = aesd_adjust_file_offset(filp, seekto.write_cmd, seekto.write_cmd_offset);
+            PDEBUG("aesd_unlocked_ioctl: write_cmd = %d, offset=%d, rv=%ld", seekto.write_cmd,seekto.write_cmd_offset, rv); 
+        }
+        break;
+    }
+
+    default:
+    {
+        break;
+    }
+
+    }
+
+    return rv;
 }
 
 ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
@@ -118,7 +189,7 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
     int entry_offset_index;                     // index of the entry containing the requested entry
     struct aesd_buffer_entry *entry;
     int i;                    // loop iterator
-    ssize_t retval = -ENOMEM; // return value
+    ssize_t rv = -ENOMEM; // return value
     loff_t starting_fpos;
 
     if (mutex_lock_interruptible(&aesd_mutex))
@@ -177,10 +248,10 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
     kbuf = (char *)kmalloc(count, GFP_KERNEL);
     if (kbuf == NULL)
     {
-        retval = -ENOMEM;
+        rv = -ENOMEM;
         printk(KERN_ERR "aesd_read: ENOMEM on kbuf kmalloc");
         mutex_unlock(&aesd_mutex);
-        return retval;
+        return rv;
     }
     memset(kbuf, 0, count * sizeof(char));
 
@@ -194,7 +265,7 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
         entry = kmalloc(sizeof(struct aesd_buffer_entry), GFP_KERNEL);
         if (!entry)
         {
-            retval = -ENOMEM;
+            rv = -ENOMEM;
             printk(KERN_ERR "aesd_read: ENOMEM on entry kmalloc");
             goto fail;
         }
@@ -223,7 +294,7 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
         mc_rv = memcpy(kbuf + kbuf_offset, entry->buffptr, entry->size);
         if (mc_rv == NULL)
         {
-            retval = -EFAULT;
+            rv = -EFAULT;
             PDEBUG("aesd_read: failed memcpy");
             goto fail;
         }
@@ -234,8 +305,8 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
         kfree(entry);
     }
 
-    //update the file pointer
-    kcount = simple_read_from_buffer(buf, count, f_pos, kbuf-*f_pos, aesd_device->f_size);
+    // update the file pointer
+    kcount = simple_read_from_buffer(buf, count, f_pos, kbuf - *f_pos, aesd_device->f_size);
     PDEBUG("aesd_read: kbuf = %s\n aesd_read: buf = %s", kbuf, buf);
 
     PDEBUG("aesd_read: end of read count = %ld, *f_pos = %lld, kcount = %ld", count, *f_pos, kcount);
@@ -250,7 +321,7 @@ fail:
         kfree(entry);
     kfree(kbuf);
     mutex_unlock(&aesd_mutex);
-    return retval;
+    return rv;
 }
 
 ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
@@ -259,7 +330,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
     // struct aesd_buffer_entry *entry;
     char *kbuf;    // kernel write buffer
     size_t kcount; // kernel write count
-    ssize_t retval = -ENOMEM;
+    ssize_t rv = -ENOMEM;
     unsigned long cfu_rv; // copy from user return value
     long long int *mc_rv; // memcpy return value
     struct aesd_buffer_entry *entry;
@@ -280,10 +351,10 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
     kbuf = (char *)kmalloc(kcount, GFP_KERNEL);
     if (kbuf == NULL)
     {
-        retval = -ENOMEM;
+        rv = -ENOMEM;
         printk(KERN_ERR "aesd_write: ENOMEM on kbuf kmalloc");
         mutex_unlock(&aesd_mutex);
-        return retval;
+        return rv;
     }
     // if there is a partial write, copy that into the kernel buffer first
     if (aesd_device->pwrite->size > 0)
@@ -293,7 +364,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
         mc_rv = memcpy(kbuf, aesd_device->pwrite->buffptr, aesd_device->pwrite->size);
         if (mc_rv == NULL)
         {
-            retval = -EFAULT;
+            rv = -EFAULT;
             PDEBUG("aesd_write: failed memcpy from aesd_device->pwrite->buffptr");
             goto fail;
         }
@@ -304,7 +375,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
     cfu_rv = copy_from_user(kbuf + aesd_device->pwrite->size, buf, count);
     if (cfu_rv != 0)
     {
-        retval = -EFAULT;
+        rv = -EFAULT;
         PDEBUG("aesd_write: failed copy_from_user with %lu bytes\n", cfu_rv);
         goto fail;
     }
@@ -321,16 +392,16 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
         aesd_device->pwrite->buffptr = (char *)kmalloc(kcount, GFP_KERNEL);
         if (aesd_device->pwrite->buffptr == NULL)
         {
-            retval = -ENOMEM;
+            rv = -ENOMEM;
             printk(KERN_ERR "aesd_write: ENOMEM on aesd_device->pwrite->buffptr buffer kmalloc");
             mutex_unlock(&aesd_mutex);
-            return retval;
+            return rv;
         }
         // copy the partial write into the pwrite buffer in kernel
         mc_rv = memcpy((void *)aesd_device->pwrite->buffptr, kbuf, kcount);
         if (mc_rv == NULL)
         {
-            retval = -EFAULT;
+            rv = -EFAULT;
             PDEBUG("aesd_write:  failed memcpy to aesd_device->pwrite->buffptr");
             goto fail;
         }
@@ -349,7 +420,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
         entry = kmalloc(sizeof(struct aesd_buffer_entry), GFP_KERNEL);
         if (!entry)
         {
-            retval = -ENOMEM;
+            rv = -ENOMEM;
             printk(KERN_ERR "ENOMEM on entry kmalloc");
             goto fail;
         }
@@ -382,6 +453,7 @@ fail:
     mutex_unlock(&aesd_mutex);
     return count;
 }
+
 struct file_operations aesd_fops = {
     .owner = THIS_MODULE,
     .read = aesd_read,
@@ -389,7 +461,7 @@ struct file_operations aesd_fops = {
     .open = aesd_open,
     .release = aesd_release,
     .llseek = aesd_llseek,
-    .unlocked_ioctl = aesd_unlocked_ioctl;
+    .unlocked_ioctl = aesd_unlocked_ioctl,
 };
 
 static int aesd_setup_cdev(struct aesd_dev *dev)

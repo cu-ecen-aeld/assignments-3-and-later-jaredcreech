@@ -1,9 +1,9 @@
 #define _GNU_SOURCE
-#define PORT "9000"                         // the port users will be connecting to
-#define BACKLOG 10                          // how many pending connections queue will hold
-#define MAXDATASIZE 1048576                 // max number of bytes we can get at once
+#define PORT "9000"         // the port users will be connecting to
+#define BACKLOG 10          // how many pending connections queue will hold
+#define MAXDATASIZE 1048576 // max number of bytes we can get at once
 #if USE_AESD_CHAR_DEVICE
-#define WR_PATH "/dev/"                 // Path to write
+#define WR_PATH "/dev/"           // Path to write
 #define FILE_PATH "/dev/aesdchar" // File to write
 #define CHAR_DEVICE true
 #else
@@ -11,6 +11,8 @@
 #define FILE_PATH "/var/tmp/aesdsocketdata" // File to write
 #define CHAR_DEVICE false
 #endif
+
+#define IOCTL "AESDCHAR_IOCSEEKTO:"
 
 #include "queue.h"
 #include <stdio.h>
@@ -30,6 +32,7 @@
 #include <sys/stat.h>
 #include <stdbool.h>
 #include <pthread.h>
+#include "../aesd-char-driver/aesd_ioctl.h"
 
 typedef struct thread_data
 {
@@ -91,6 +94,9 @@ void *threadFunc(void *thread_param)
     char *strtowr;         // string to write to file
     int i;                 // loop iterator
     thread_data *thread_func_args = (thread_data *)thread_param;
+    bool ioctl_message = false;
+    struct aesd_seekto seekto;
+    int rv = 0; // return value
 
     // receive the string from the client
     if ((numbytes = recv(thread_func_args->new_fd, buf, MAXDATASIZE - 1, 0)) == -1)
@@ -102,6 +108,19 @@ void *threadFunc(void *thread_param)
 
     // add NULL to end of buf so that it is a valid string
     buf[numbytes] = '\0';
+
+    for (i = 0; i < sizeof(IOCTL - 1); i++)
+    {
+        if (buf[i] == IOCTL[i])
+        {
+            ioctl_message = true;
+        }
+        else
+        {
+            ioctl_message = false;
+            break;
+        }
+    }
 
     // check for newline string terminator in received data
     if (buf[numbytes - 1] != '\n')
@@ -137,17 +156,28 @@ void *threadFunc(void *thread_param)
         pthread_exit((void *)EXIT_FAILURE);
     }
 
-    if (fputs(strtowr, fp) == EOF)
+    if (ioctl_message == true)
     {
-        perror("fputs");
-        pthread_mutex_unlock(thread_func_args->mutex);
-        fclose(fp);
-        pthread_exit((void *)EXIT_FAILURE);
+        printf("IOCTL MESSAGE = %s\n", strtowr);
+        seekto.write_cmd = atoi(&strtowr[sizeof(IOCTL) - 1]);
+        seekto.write_cmd_offset = atoi(&strtowr[sizeof(IOCTL) + 1]);
+        rv = ioctl(fileno(fp), AESDCHAR_IOCSEEKTO, &seekto);
+        printf("write_cmd = %d, write_cmd_offset = %d, ioctl rv=%d\n", seekto.write_cmd, seekto.write_cmd_offset, rv);
+    }
+    else
+    {
+        if (fputs(strtowr, fp) == EOF)
+        {
+            perror("fputs");
+            pthread_mutex_unlock(thread_func_args->mutex);
+            fclose(fp);
+            pthread_exit((void *)EXIT_FAILURE);
+        }
+        fseek(fp, 0, SEEK_SET); // go to the beginning of the file
     }
     free(strtowr); // all done with this string
 
     // read back what you wrote
-    fseek(fp, 0, SEEK_SET);                       // go to the beginning of the file
     memset(buf, 0, MAXDATASIZE * sizeof(buf[0])); // zeroize the receive buffer
     while (fgets(buf, MAXDATASIZE, fp) != NULL)
     {
@@ -165,7 +195,14 @@ void *threadFunc(void *thread_param)
     // done with the connection
     // printf("server: closed connection from %s\n", thread_func_args->s);
     syslog(LOG_INFO, "Closed connection from %s", thread_func_args->s);
-    pthread_exit((void *)EXIT_SUCCESS);
+    if (rv == 0)
+    {
+        pthread_exit((void *)EXIT_SUCCESS);
+    }
+    else
+    {
+        pthread_exit((void *)EXIT_FAILURE);
+    }
 }
 
 void *write_timestamp(void *mutex)
